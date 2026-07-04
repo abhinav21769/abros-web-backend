@@ -6,22 +6,33 @@ const normalizeGstRate = (value) => {
   return rate;
 };
 
-const calculateItemAmount = (quantity, rate) =>
-  Math.round(Number(quantity) * Number(rate) * 100) / 100;
+const normalizeDiscount = (value) => {
+  const discount = Number(value);
+  if (!Number.isFinite(discount) || discount < 0) return 0;
+  return Math.min(discount, 100);
+};
+
+const calculateItemAmount = (quantity, rate, discount = 0) => {
+  const gross = Number(quantity) * Number(rate);
+  const discountAmount = gross * (normalizeDiscount(discount) / 100);
+  return Math.round((gross - discountAmount) * 100) / 100;
+};
 
 const buildInvoiceTotals = (items) => {
   const normalizedItems = items.map((item) => {
     const quantity = Number(item.quantity);
     const free = Number(item.free) || 0;
     const rate = Number(item.rate);
+    const discount = normalizeDiscount(item.discount);
     const gstRate = normalizeGstRate(item.gstRate);
-    const amount = calculateItemAmount(quantity, rate);
+    const amount = calculateItemAmount(quantity, rate, discount);
 
     return {
       ...item,
       quantity,
       free,
       rate,
+      discount,
       gstRate,
       amount,
     };
@@ -53,5 +64,6 @@ const buildInvoiceTotals = (items) => {
 module.exports = {
   DEFAULT_GST_RATE,
   normalizeGstRate,
+  normalizeDiscount,
   buildInvoiceTotals,
 };

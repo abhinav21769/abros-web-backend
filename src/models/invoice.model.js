@@ -31,6 +31,12 @@ const invoiceItemSchema = new mongoose.Schema(
       type: String,
       trim: true,
     },
+    discount: {
+      type: Number,
+      default: 0,
+      min: [0, "Discount cannot be negative"],
+      max: [100, "Discount cannot exceed 100"],
+    },
     gstRate: {
       type: Number,
       default: 5,
