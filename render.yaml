@@ -15,3 +15,15 @@ services:
         sync: false
       - key: ADMIN_SECRET
         sync: false
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: TELEGRAM_OWNER_CHAT_ID
+        sync: false
+      - key: TELEGRAM_ENABLE_POLLING
+        value: false
+      - key: TELEGRAM_WEBHOOK_SECRET
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: GEMINI_MODEL
+        value: gemini-2.5-flash

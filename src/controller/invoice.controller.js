@@ -4,8 +4,14 @@ const { SUCCESS, ERRORS, getUserMessage } = require("../utils/messages");
 
 const { buildInvoiceTotals } = require("../utils/invoiceTax");
 const {
+  MEDICINE_POPULATE_FIELDS,
+  createInvoiceRecord,
+  generateInvoiceNumberValue,
+  normalizeInvoiceDate,
+  normalizeInvoiceType,
+} = require("../services/invoice.service");
+const {
   InsufficientStockError,
-  addStockForItems,
   applyInvoiceStockChanges,
   computeStockChanges,
   deductStockForItems,
@@ -14,78 +20,9 @@ const {
   withTransaction,
 } = require("../services/inventory.service");
 
-const MEDICINE_POPULATE_FIELDS =
-  "name mrp rate packagingType batchNumber expiryDate manufacturer hsn gstRate";
-
-const normalizeInvoiceDate = (value) => {
-  if (!value) return undefined;
-
-  if (typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value)) {
-    return new Date(`${value}T00:00:00+05:30`);
-  }
-
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return undefined;
-
-  const istDate = date.toLocaleDateString("en-CA", {
-    timeZone: "Asia/Kolkata",
-  });
-
-  return new Date(`${istDate}T00:00:00+05:30`);
-};
-
-const normalizeInvoiceType = (value) =>
-  value === "purchase" ? "purchase" : "sale";
-
 const createInvoice = async (req, res) => {
   try {
-    const { items, invoiceDate, invoiceType, ...rest } = req.body;
-    const type = normalizeInvoiceType(invoiceType);
-    const {
-      items: normalizedItems,
-      subtotal,
-      total,
-    } = buildInvoiceTotals(items);
-    const status = rest.status || "pending";
-
-    const invoice = await withTransaction(async (session) => {
-      const created = new Invoice({
-        ...rest,
-        invoiceType: type,
-        status,
-        invoiceDate: normalizeInvoiceDate(invoiceDate),
-        items: normalizedItems,
-        subtotal,
-        total,
-      });
-
-      await created.save({ session });
-
-      if (isInvoiceStockActive(status, type)) {
-        const ledgerMeta = {
-          referenceType: "invoice",
-          referenceId: created._id,
-          referenceLabel: created.invoiceNumber,
-        };
-
-        if (type === "purchase") {
-          await addStockForItems(normalizedItems, session, {
-            type: "purchase",
-            ...ledgerMeta,
-          });
-        } else {
-          await deductStockForItems(normalizedItems, session, {
-            type: "sale",
-            ...ledgerMeta,
-          });
-        }
-      }
-
-      return created;
-    });
-
-    await invoice.populate("customer", "name address contact gstin dlNo");
-    await invoice.populate("items.medicine", MEDICINE_POPULATE_FIELDS);
+    const invoice = await createInvoiceRecord(req.body);
 
     return sendSuccess(res, {
       message: SUCCESS.invoice.created,
@@ -359,75 +296,7 @@ const getInvoiceStats = async (req, res) => {
 const generateInvoiceNumber = async (req, res) => {
   try {
     const invoiceType = normalizeInvoiceType(req.query.invoiceType);
-
-    const year = Number(
-      new Intl.DateTimeFormat("en-CA", {
-        timeZone: "Asia/Kolkata",
-        year: "numeric",
-      }).format(new Date()),
-    );
-
-    const fullYear = String(year);
-
-    const escapeRegex = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-
-    // ===========================
-    // PURCHASE INVOICE
-    // Format: PO-2026-001
-    // ===========================
-    if (invoiceType === "purchase") {
-      const prefix = `PO-${fullYear}-`;
-
-      // Count old and new formats
-      const legacyPrefixes = [
-        prefix, // PO-2026-
-        `PO-${String(year).slice(-2)}-`, // PO-26-
-        `PUR-${String(year).slice(-2)}-`,
-        `PAH-${String(year).slice(-2)}-`,
-      ];
-
-      const count = await Invoice.countDocuments({
-        invoiceType: "purchase",
-        $or: legacyPrefixes.map((legacyPrefix) => ({
-          invoiceNumber: {
-            $regex: `^${escapeRegex(legacyPrefix)}`,
-            $options: "i",
-          },
-        })),
-      });
-
-      const invoiceNumber = `${prefix}${String(count + 1).padStart(3, "0")}`;
-
-      return sendSuccess(res, {
-        data: {
-          invoiceNumber,
-          invoiceType: "purchase",
-        },
-      });
-    }
-
-    // ===========================
-    // SALE INVOICE
-    // Format: AH-2026-001
-    // ===========================
-    const prefix = `AH-${fullYear}-`;
-
-    const legacyPrefixes = [
-      prefix, // AH-2026-
-      `AH-${String(year).slice(-2)}-`, // AH-26-
-    ];
-
-    const count = await Invoice.countDocuments({
-      invoiceType: { $in: ["sale", null] },
-      $or: legacyPrefixes.map((legacyPrefix) => ({
-        invoiceNumber: {
-          $regex: `^${escapeRegex(legacyPrefix)}`,
-          $options: "i",
-        },
-      })),
-    });
-
-    const invoiceNumber = `${prefix}${String(count + 1).padStart(3, "0")}`;
+    const invoiceNumber = await generateInvoiceNumberValue(invoiceType);
 
     return sendSuccess(res, {
       data: {

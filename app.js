@@ -11,9 +11,11 @@ const invoiceRoutes = require("./src/routes/invoice.routes");
 const purchaseRoutes = require("./src/routes/purchase.routes");
 const ledgerRoutes = require("./src/routes/ledger.routes");
 const dashboardRoutes = require("./src/routes/dashboard.routes");
+const telegramRoutes = require("./src/routes/telegram.routes");
 const { authenticate } = require("./src/middleware/auth.middleware");
 const { ERROR_CODES, sendSuccess, sendError } = require("./src/utils/response");
 const { ERRORS } = require("./src/utils/messages");
+const { startTelegramPolling } = require("./src/services/telegramBot.service");
 
 const app = express();
 const isProduction = process.env.NODE_ENV === "production";
@@ -43,6 +45,7 @@ app.get("/", (req, res) => {
         purchases: "/api/purchases",
         ledger: "/api/ledger",
         dashboard: "/api/dashboard",
+        telegram: "/api/telegram",
         ...(isProduction ? {} : { swagger: "/api-docs" }),
       },
     },
@@ -50,6 +53,7 @@ app.get("/", (req, res) => {
 });
 
 app.use("/api/auth", authRoutes);
+app.use("/api/telegram", telegramRoutes);
 app.use("/api/medicines", authenticate, medicineRoutes);
 app.use("/api/customers", authenticate, customerRoutes);
 app.use("/api/invoices", authenticate, invoiceRoutes);
@@ -83,6 +87,7 @@ const startServer = async () => {
 
   app.listen(PORT, "0.0.0.0", () => {
     console.log(`Server is running on port ${PORT}`);
+    startTelegramPolling();
   });
 };
 

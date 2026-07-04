@@ -17,6 +17,12 @@ npm run dev
 | `MONGO_URI` | MongoDB connection string |
 | `JWT_SECRET` | Secret for signing login tokens |
 | `JWT_EXPIRES_IN` | Token lifetime (default: `7d`) |
+| `TELEGRAM_BOT_TOKEN` | Telegram bot token from BotFather |
+| `TELEGRAM_OWNER_CHAT_ID` | Telegram chat ID allowed to create bills |
+| `TELEGRAM_ENABLE_POLLING` | Set `true` for local bot polling, `false` for webhook mode |
+| `TELEGRAM_WEBHOOK_SECRET` | Random secret Telegram will send with webhook requests |
+| `GEMINI_API_KEY` | Gemini API key for parsing bill messages |
+| `GEMINI_MODEL` | Gemini model name, defaults to `gemini-2.5-flash` |
 | `ADMIN_SECRET` | Required header secret to create users via API |
 | `NODE_ENV` | Set to `production` on Render to disable Swagger |
 
@@ -64,4 +70,4 @@ Backend deploys to [Render](https://render.com) via `render.yaml`.
 
 Production API: https://abros-healthcare.onrender.com
 
-Set `NODE_ENV=production`, `JWT_SECRET`, and `ADMIN_SECRET` in Render environment variables.
+Set `NODE_ENV=production`, `JWT_SECRET`, `ADMIN_SECRET`, Telegram, and Gemini values in Render environment variables.
