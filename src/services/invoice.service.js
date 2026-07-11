@@ -90,7 +90,10 @@ const createInvoiceRecord = async (payload) => {
   const { items, invoiceDate, invoiceType, ...rest } = payload;
   const type = normalizeInvoiceType(invoiceType);
   const { items: normalizedItems, subtotal, total } = buildInvoiceTotals(items);
-  const status = rest.status || "pending";
+  const status =
+    rest.paymentType === "cash" && rest.status !== "cancelled"
+      ? "paid"
+      : rest.status || "pending";
   const invoiceNumber =
     rest.invoiceNumber || (await generateInvoiceNumberValue(type));
 

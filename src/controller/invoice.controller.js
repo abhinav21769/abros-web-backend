@@ -158,7 +158,13 @@ const updateInvoice = async (req, res) => {
       }
 
       const oldStatus = existing.status;
-      const newStatus = updateData.status ?? oldStatus;
+      const paymentType = updateData.paymentType ?? existing.paymentType;
+      const requestedStatus = updateData.status ?? oldStatus;
+      const newStatus =
+        paymentType === "cash" && requestedStatus !== "cancelled"
+          ? "paid"
+          : requestedStatus;
+      updateData.status = newStatus;
       const oldItems = existing.items;
       const newItems = normalizedItems ?? oldItems;
 
