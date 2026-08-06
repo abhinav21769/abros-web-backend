@@ -61,9 +61,33 @@ const buildInvoiceTotals = (items) => {
   };
 };
 
+const calculateInvoiceTaxBreakdown = (items) => {
+  const { items: normalizedItems, subtotal, total } = buildInvoiceTotals(items);
+  let cgst = 0;
+  let sgst = 0;
+
+  normalizedItems.forEach((item) => {
+    const halfRate = item.gstRate / 200;
+    cgst += Math.round(item.amount * halfRate * 100) / 100;
+    sgst += Math.round(item.amount * halfRate * 100) / 100;
+  });
+
+  cgst = Math.round(cgst * 100) / 100;
+  sgst = Math.round(sgst * 100) / 100;
+
+  return {
+    subtotal,
+    cgst,
+    sgst,
+    gst: Math.round((cgst + sgst) * 100) / 100,
+    total,
+  };
+};
+
 module.exports = {
   DEFAULT_GST_RATE,
   normalizeGstRate,
   normalizeDiscount,
   buildInvoiceTotals,
+  calculateInvoiceTaxBreakdown,
 };

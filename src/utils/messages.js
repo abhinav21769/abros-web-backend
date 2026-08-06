@@ -47,6 +47,7 @@ const ERRORS = {
     invoice: "Could not load invoice details. Please try again.",
     invoiceStats: "Could not load invoice summary. Please try again.",
     dashboardStats: "Could not load dashboard summary. Please try again.",
+    gstSummary: "Could not load GST return summary. Please try again.",
     invoiceNumber: "Could not create a new invoice number. Please try again.",
     purchases: "Could not load purchase entries. Please refresh and try again.",
     purchase: "Could not load purchase details. Please try again.",

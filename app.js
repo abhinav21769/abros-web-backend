@@ -11,6 +11,7 @@ const invoiceRoutes = require("./src/routes/invoice.routes");
 const purchaseRoutes = require("./src/routes/purchase.routes");
 const ledgerRoutes = require("./src/routes/ledger.routes");
 const dashboardRoutes = require("./src/routes/dashboard.routes");
+const gstRoutes = require("./src/routes/gst.routes");
 const telegramRoutes = require("./src/routes/telegram.routes");
 const { authenticate } = require("./src/middleware/auth.middleware");
 const { ERROR_CODES, sendSuccess, sendError } = require("./src/utils/response");
@@ -45,6 +46,7 @@ app.get("/", (req, res) => {
         purchases: "/api/purchases",
         ledger: "/api/ledger",
         dashboard: "/api/dashboard",
+        gst: "/api/gst",
         telegram: "/api/telegram",
         ...(isProduction ? {} : { swagger: "/api-docs" }),
       },
@@ -60,6 +62,7 @@ app.use("/api/invoices", authenticate, invoiceRoutes);
 app.use("/api/purchases", authenticate, purchaseRoutes);
 app.use("/api/ledger", authenticate, ledgerRoutes);
 app.use("/api/dashboard", authenticate, dashboardRoutes);
+app.use("/api/gst", authenticate, gstRoutes);
 
 app.use((err, req, res, next) => {
   console.error(err.stack);
