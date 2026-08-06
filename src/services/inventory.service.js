@@ -150,8 +150,22 @@ async function applyStockChanges(changes, session, ledgerMeta) {
 }
 
 async function withTransaction(fn) {
-  const session = await mongoose.startSession();
-  session.startTransaction();
+  let session = null;
+  try {
+    session = await mongoose.startSession();
+    session.startTransaction();
+  } catch (err) {
+    if (session) {
+      try {
+        session.endSession();
+      } catch (_) {}
+    }
+    session = null;
+  }
+
+  if (!session) {
+    return fn(null);
+  }
 
   try {
     const result = await fn(session);

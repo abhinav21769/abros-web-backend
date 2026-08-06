@@ -307,7 +307,7 @@ const generateInvoiceNumber = async (req, res) => {
     return sendSuccess(res, {
       data: {
         invoiceNumber,
-        invoiceType: "sale",
+        invoiceType,
       },
     });
   } catch (error) {
