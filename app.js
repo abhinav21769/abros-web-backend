@@ -85,7 +85,18 @@ app.use((req, res) => {
 
 const PORT = process.env.PORT || 3000;
 
+const validateEnvironment = () => {
+  const required = ["MONGO_URI", "JWT_SECRET"];
+  const missing = required.filter((key) => !process.env[key]);
+  if (missing.length > 0) {
+    console.warn(
+      `[CONFIG WARN] Missing recommended environment variables: ${missing.join(", ")}`,
+    );
+  }
+};
+
 const startServer = async () => {
+  validateEnvironment();
   await connectDB();
 
   app.listen(PORT, "0.0.0.0", () => {
