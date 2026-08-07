@@ -98,33 +98,80 @@ function extractJson(text) {
   return JSON.parse(cleaned.slice(start, end + 1));
 }
 
+async function fetchDatabaseContext() {
+  const customers = await Customer.find({}, "name address contact gstin dlNo").lean();
+  const medicines = await Medicine.find({}, "name ptr mrp rate packagingType batchNumber expiryDate hsn gstRate quantity").lean();
+
+  const customerListText = customers
+    .map(
+      (c) =>
+        `- ID: "${c._id}" | Name: "${c.name}" | Address: "${c.address || "N/A"}" | Contact: "${c.contact || "N/A"}"`
+    )
+    .join("\n");
+
+  const medicineListText = medicines
+    .map(
+      (m) =>
+        `- ID: "${m._id}" | Name: "${m.name}" | Rate: ${m.ptr ?? m.rate ?? m.mrp ?? 0} | Packing: "${m.packagingType || ""}"`
+    )
+    .join("\n");
+
+  return { customers, medicines, customerListText, medicineListText };
+}
+
 async function parseBillMessage(message) {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) {
     throw new AgentBillError("Gemini API key is not configured.");
   }
 
+  const dbContext = await fetchDatabaseContext();
   const model = process.env.GEMINI_MODEL || "gemini-2.5-flash";
+
   const prompt = [
-    "Extract invoice details from the pharmacy owner's message.",
-    "Return only valid JSON. No markdown.",
-    "Schema:",
+    "You are an AI assistant for a pharmacy owner. Extract invoice billing details from the owner's message by matching entities against the provided database directory.",
+    "",
+    "--- DATABASE CUSTOMER DIRECTORY ---",
+    dbContext.customerListText || "(No customers in database)",
+    "",
+    "--- DATABASE MEDICINE INVENTORY ---",
+    dbContext.medicineListText || "(No medicines in database)",
+    "",
+    "Return only valid JSON matching this schema:",
     "{",
+    '  "matchedCustomerId": "string | null",',
     '  "customerName": "string",',
     '  "paymentType": "cash|credit",',
     '  "status": "paid|pending",',
     '  "items": [',
-    '    { "medicineName": "string", "quantity": number, "free": number, "rate": number, "discount": number }',
+    '    {',
+    '      "matchedMedicineId": "string | null",',
+    '      "medicineName": "string",',
+    '      "quantity": number,',
+    '      "free": number,',
+    '      "rate": number | null,',
+    '      "discount": number',
+    "    }",
     "  ]",
     "}",
-    "Rules:",
-    "- paymentType defaults to cash.",
-    "- status defaults to paid for cash and pending for credit.",
-    "- free and discount default to 0.",
-    "- quantity must be at least 1.",
-    "- If rate is not present, use null.",
     "",
-    `Message: ${message}`,
+    "Matching Rules:",
+    "1. CUSTOMER MATCHING (RAG): Compare the requested customer in the message against the DATABASE CUSTOMER DIRECTORY.",
+    "   - Use names, partial names, shorthand, or address/city details to find the matching customer.",
+    "   - If a customer shares a similar name, use address/location details in the message to disambiguate.",
+    "   - If matched, set 'matchedCustomerId' to their ID and 'customerName' to their exact full DB name.",
+    "   - If no customer in the database matches, set 'matchedCustomerId': null and 'customerName' to the name extracted from the message.",
+    "2. MEDICINE MATCHING (RAG): Compare requested medicine names against the DATABASE MEDICINE INVENTORY.",
+    "   - If matched, set 'matchedMedicineId' to its ID and 'medicineName' to its exact DB name.",
+    "   - If not matched, set 'matchedMedicineId': null.",
+    "3. DEFAULT VALUES:",
+    "   - paymentType defaults to 'cash'. If 'credit' or 'udhaar' or 'pending' is mentioned, set 'credit'.",
+    "   - status defaults to 'paid' for cash, 'pending' for credit.",
+    "   - free and discount default to 0.",
+    "   - quantity defaults to 1 if not specified.",
+    "   - If rate is not specified in the message, set 'rate': null.",
+    "",
+    `Message: "${message}"`,
   ].join("\n");
 
   const response = await fetch(
@@ -139,7 +186,7 @@ async function parseBillMessage(message) {
           responseMimeType: "application/json",
         },
       }),
-    },
+    }
   );
 
   if (!response.ok) {
@@ -152,36 +199,63 @@ async function parseBillMessage(message) {
   const parsed = extractJson(text);
 
   if (
-    !parsed.customerName ||
+    (!parsed.customerName && !parsed.matchedCustomerId) ||
     !Array.isArray(parsed.items) ||
     !parsed.items.length
   ) {
     throw new AgentBillError(
-      "Please include customer name and at least one medicine item.",
+      "Please include customer name and at least one medicine item."
     );
   }
 
   return parsed;
 }
 
-async function findOrCreateCustomer(name) {
+async function findOrCreateCustomer(name, matchedCustomerId) {
+  if (matchedCustomerId) {
+    const customer = await Customer.findById(matchedCustomerId);
+    if (customer) return customer;
+  }
+
   const trimmedName = String(name || "").trim();
   if (!trimmedName) {
     throw new AgentBillError("Customer name is required.");
   }
 
+  // 1. Exact match (case insensitive)
   const exact = await Customer.findOne({
     name: { $regex: `^${escapeRegex(trimmedName)}$`, $options: "i" },
   });
   if (exact) return exact;
 
+  // 2. Substring match (case insensitive)
+  const contains = await Customer.findOne({
+    name: { $regex: escapeRegex(trimmedName), $options: "i" },
+  });
+  if (contains) return contains;
+
+  // 3. Word match for multi-word names
+  const words = trimmedName.split(/\s+/).filter((w) => w.length > 2);
+  for (const word of words) {
+    const wordMatch = await Customer.findOne({
+      name: { $regex: escapeRegex(word), $options: "i" },
+    });
+    if (wordMatch) return wordMatch;
+  }
+
+  // 4. Create new customer only if no existing customer matched
   return Customer.create({
     name: trimmedName,
     address: "Not provided",
   });
 }
 
-async function findMedicineByName(name) {
+async function findMedicineByName(name, matchedMedicineId) {
+  if (matchedMedicineId) {
+    const medicine = await Medicine.findById(matchedMedicineId);
+    if (medicine) return medicine;
+  }
+
   const trimmedName = String(name || "").trim();
   if (!trimmedName) {
     throw new AgentBillError("Medicine name is required.");
@@ -217,13 +291,19 @@ function normalizeStatus(value, paymentType) {
 }
 
 async function buildInvoicePayload(parsed) {
-  const customer = await findOrCreateCustomer(parsed.customerName);
+  const customer = await findOrCreateCustomer(
+    parsed.customerName,
+    parsed.matchedCustomerId
+  );
   const paymentType = normalizePaymentType(parsed.paymentType);
   const status = normalizeStatus(parsed.status, paymentType);
   const items = [];
 
   for (const item of parsed.items) {
-    const medicine = await findMedicineByName(item.medicineName);
+    const medicine = await findMedicineByName(
+      item.medicineName,
+      item.matchedMedicineId
+    );
     const quantity = Number(item.quantity) || 1;
     const rate =
       item.rate == null || item.rate === ""
@@ -268,10 +348,10 @@ async function handleTelegramMessage(message) {
 
   if (!chatId || !text) return;
 
-  if (text === "/start") {
+  if (text === "/start" || text === "/help") {
     await sendTelegramMessage(
       chatId,
-      `Abros Billing Bot ready. Your chat id is <code>${chatId}</code>.`,
+      `<b>Abros Billing Bot Ready!</b>\nYour Chat ID: <code>${chatId}</code>\n\nSend any order text (e.g. <i>"Ramesh Kumar Paracetamol 10 tabs 15.50 cash"</i>) to create an invoice and receive your A4 GST Tax Invoice PDF!`,
     );
     return;
   }
@@ -308,7 +388,7 @@ async function processTelegramUpdate(update) {
 }
 
 async function startTelegramPolling() {
-  if (pollingStarted || process.env.TELEGRAM_ENABLE_POLLING !== "true") {
+  if (pollingStarted || process.env.TELEGRAM_ENABLE_POLLING === "false") {
     return;
   }
 
