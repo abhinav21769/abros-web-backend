@@ -26,7 +26,7 @@ function getOwnerChatId() {
 }
 
 function isConfigured() {
-  return Boolean(getBotToken() && process.env.GEMINI_API_KEY);
+  return Boolean(getBotToken());
 }
 
 function telegramUrl(method) {
@@ -388,12 +388,12 @@ async function processTelegramUpdate(update) {
 }
 
 async function startTelegramPolling() {
-  if (pollingStarted || process.env.TELEGRAM_ENABLE_POLLING === "false") {
+  if (pollingStarted || process.env.TELEGRAM_DISABLE_POLLING === "true") {
     return;
   }
 
   if (!isConfigured()) {
-    console.log("Telegram polling skipped: bot or Gemini env is missing.");
+    console.log("Telegram polling skipped: TELEGRAM_BOT_TOKEN missing.");
     return;
   }
 

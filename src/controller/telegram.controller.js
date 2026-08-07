@@ -33,7 +33,39 @@ const handleWebhook = async (req, res) => {
   return sendSuccess(res, { data: { ok: true } });
 };
 
+const setupWebhook = async (req, res) => {
+  const token = process.env.TELEGRAM_BOT_TOKEN;
+  if (!token) {
+    return sendError(res, {
+      message: "TELEGRAM_BOT_TOKEN environment variable is not configured.",
+      code: ERROR_CODES.VALIDATION_ERROR,
+      statusCode: 400,
+    });
+  }
+
+  const webhookUrl =
+    process.env.TELEGRAM_WEBHOOK_URL ||
+    "https://abros-healthcare.onrender.com/api/telegram/webhook";
+  const secret =
+    process.env.TELEGRAM_WEBHOOK_SECRET ||
+    "6ad4d46827d7a49b8ab1dcd60de5fe24118198ac5061de28f5540ed2551329ef";
+
+  try {
+    const url = `https://api.telegram.org/bot${token}/setWebhook?url=${encodeURIComponent(webhookUrl)}&secret_token=${encodeURIComponent(secret)}`;
+    const response = await fetch(url);
+    const data = await response.json();
+    return sendSuccess(res, { data });
+  } catch (error) {
+    return sendError(res, {
+      message: error.message || "Failed to set Telegram webhook",
+      code: ERROR_CODES.INTERNAL_ERROR,
+      statusCode: 500,
+    });
+  }
+};
+
 module.exports = {
   getTelegramStatus,
   handleWebhook,
+  setupWebhook,
 };
