@@ -1,7 +1,7 @@
 const Customer = require("../models/customer.model");
 const Medicine = require("../models/medicine.model");
 const { createInvoiceRecord } = require("./invoice.service");
-const { buildInvoicePdf } = require("../utils/simpleInvoicePdf");
+const { buildInvoicePdf } = require("../utils/fullInvoicePdf");
 
 const TELEGRAM_API = "https://api.telegram.org/bot";
 const GEMINI_API =
@@ -280,7 +280,7 @@ async function handleTelegramMessage(message) {
 
   await sendTelegramMessage(chatId, "Creating invoice...");
   const invoice = await createBillFromMessage(text);
-  const pdfBuffer = buildInvoicePdf(invoice);
+  const pdfBuffer = await buildInvoicePdf(invoice);
   const filename = `${invoice.invoiceNumber}.pdf`;
   await sendTelegramDocument(
     chatId,
