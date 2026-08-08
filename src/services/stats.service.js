@@ -199,7 +199,7 @@ const getProductWiseMonthlySalesData = async ({ year, search } = {}) => {
 
   const matchStage = {
     invoiceType: { $ne: "purchase" },
-    status: { $ne: "cancelled" },
+    status: "paid",
   };
 
   if (selectedYear) {
@@ -237,7 +237,7 @@ const getProductWiseMonthlySalesData = async ({ year, search } = {}) => {
   const aggregateResults = await Invoice.aggregate(pipeline);
 
   const yearResults = await Invoice.aggregate([
-    { $match: { invoiceType: { $ne: "purchase" }, status: { $ne: "cancelled" } } },
+    { $match: { invoiceType: { $ne: "purchase" }, status: "paid" } },
     { $group: { _id: { $year: "$invoiceDate" } } },
     { $sort: { "_id": -1 } },
   ]);
