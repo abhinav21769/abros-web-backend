@@ -194,19 +194,36 @@ const getInvoiceStatsData = async () => {
   };
 };
 
-const getProductWiseMonthlySalesData = async ({ year, search } = {}) => {
-  const selectedYear = year ? parseInt(year, 10) : new Date().getFullYear();
+function getCurrentFinancialYear() {
+  const now = new Date();
+  const month = now.getMonth() + 1;
+  const year = now.getFullYear();
+  return month >= 4 ? year : year - 1;
+}
+
+function getQuarterIndex(month) {
+  if (month >= 4 && month <= 6) return 0; // Q1 (Apr - Jun)
+  if (month >= 7 && month <= 9) return 1; // Q2 (Jul - Sep)
+  if (month >= 10 && month <= 12) return 2; // Q3 (Oct - Dec)
+  return 3; // Q4 (Jan - Mar)
+}
+
+const getProductWiseMonthlySalesData = async ({ year, financialYear, search } = {}) => {
+  const currentFY = getCurrentFinancialYear();
+  const selectedFY = financialYear
+    ? parseInt(financialYear, 10)
+    : year
+    ? parseInt(year, 10)
+    : currentFY;
+
+  const startDate = new Date(Date.UTC(selectedFY, 3, 1, 0, 0, 0));
+  const endDate = new Date(Date.UTC(selectedFY + 1, 2, 31, 23, 59, 59, 999));
 
   const matchStage = {
     invoiceType: { $ne: "purchase" },
-    status: "paid",
+    status: { $in: ["paid", "pending"] },
+    invoiceDate: { $gte: startDate, $lte: endDate },
   };
-
-  if (selectedYear) {
-    const startDate = new Date(Date.UTC(selectedYear, 0, 1, 0, 0, 0));
-    const endDate = new Date(Date.UTC(selectedYear, 11, 31, 23, 59, 59, 999));
-    matchStage.invoiceDate = { $gte: startDate, $lte: endDate };
-  }
 
   const pipeline = [
     { $match: matchStage },
@@ -236,28 +253,55 @@ const getProductWiseMonthlySalesData = async ({ year, search } = {}) => {
 
   const aggregateResults = await Invoice.aggregate(pipeline);
 
-  const yearResults = await Invoice.aggregate([
-    { $match: { invoiceType: { $ne: "purchase" }, status: "paid" } },
-    { $group: { _id: { $year: "$invoiceDate" } } },
-    { $sort: { "_id": -1 } },
+  const fyResults = await Invoice.aggregate([
+    { $match: { invoiceType: { $ne: "purchase" }, status: { $in: ["paid", "pending"] } } },
+    {
+      $project: {
+        financialYear: {
+          $cond: {
+            if: { $gte: [{ $month: "$invoiceDate" }, 4] },
+            then: { $year: "$invoiceDate" },
+            else: { $subtract: [{ $year: "$invoiceDate" }, 1] },
+          },
+        },
+      },
+    },
+    { $group: { _id: "$financialYear" } },
+    { $sort: { _id: -1 } },
   ]);
 
-  const availableYears = yearResults.map((r) => r._id).filter(Boolean);
-  if (!availableYears.includes(selectedYear)) {
-    availableYears.push(selectedYear);
-    availableYears.sort((a, b) => b - a);
+  let availableFYs = fyResults.map((r) => r._id).filter(Boolean);
+  if (!availableFYs.includes(selectedFY)) {
+    availableFYs.push(selectedFY);
   }
+  if (!availableFYs.includes(currentFY)) {
+    availableFYs.push(currentFY);
+  }
+  availableFYs.sort((a, b) => b - a);
+
+  const availableFinancialYears = availableFYs.map((fy) => ({
+    value: fy,
+    label: `FY ${fy}-${String(fy + 1).slice(-2)}`,
+  }));
 
   const productMap = new Map();
   let grandTotalRevenue = 0;
   let grandTotalQuantity = 0;
-  const monthlyGrandTotals = Array(12)
+  const quarterlyGrandTotals = Array(4)
     .fill(0)
     .map(() => ({ quantity: 0, revenue: 0 }));
 
+  const QUARTER_LABELS = [
+    "Q1 (Apr – Jun)",
+    "Q2 (Jul – Sep)",
+    "Q3 (Oct – Dec)",
+    "Q4 (Jan – Mar)",
+  ];
+
   aggregateResults.forEach((row) => {
     const productName = row._id.medicineName || "Unknown Product";
-    const monthIdx = row._id.month - 1;
+    const month = row._id.month;
+    const qIdx = getQuarterIndex(month);
 
     if (!productMap.has(productName)) {
       productMap.set(productName, {
@@ -265,32 +309,29 @@ const getProductWiseMonthlySalesData = async ({ year, search } = {}) => {
         totalQuantity: 0,
         totalFree: 0,
         totalRevenue: 0,
-        monthlyData: Array(12)
+        quarterlyData: Array(4)
           .fill(0)
           .map(() => ({ quantity: 0, free: 0, revenue: 0, orderCount: 0 })),
       });
     }
 
     const prod = productMap.get(productName);
-    if (monthIdx >= 0 && monthIdx < 12) {
-      const revenueVal = Math.round(row.totalRevenue * 100) / 100;
-      prod.monthlyData[monthIdx] = {
-        quantity: row.totalQuantity,
-        free: row.totalFree,
-        revenue: revenueVal,
-        orderCount: row.invoiceIds.length,
-      };
+    const revenueVal = Math.round(row.totalRevenue * 100) / 100;
 
-      prod.totalQuantity += row.totalQuantity;
-      prod.totalFree += row.totalFree;
-      prod.totalRevenue += row.totalRevenue;
+    prod.quarterlyData[qIdx].quantity += row.totalQuantity;
+    prod.quarterlyData[qIdx].free += row.totalFree;
+    prod.quarterlyData[qIdx].revenue = Math.round((prod.quarterlyData[qIdx].revenue + revenueVal) * 100) / 100;
+    prod.quarterlyData[qIdx].orderCount += row.invoiceIds.length;
 
-      grandTotalQuantity += row.totalQuantity;
-      grandTotalRevenue += row.totalRevenue;
+    prod.totalQuantity += row.totalQuantity;
+    prod.totalFree += row.totalFree;
+    prod.totalRevenue += row.totalRevenue;
 
-      monthlyGrandTotals[monthIdx].quantity += row.totalQuantity;
-      monthlyGrandTotals[monthIdx].revenue += revenueVal;
-    }
+    grandTotalQuantity += row.totalQuantity;
+    grandTotalRevenue += row.totalRevenue;
+
+    quarterlyGrandTotals[qIdx].quantity += row.totalQuantity;
+    quarterlyGrandTotals[qIdx].revenue = Math.round((quarterlyGrandTotals[qIdx].revenue + revenueVal) * 100) / 100;
   });
 
   const productsList = Array.from(productMap.values()).map((prod) => ({
@@ -302,38 +343,37 @@ const getProductWiseMonthlySalesData = async ({ year, search } = {}) => {
 
   const topProduct = productsList.length > 0 ? productsList[0].medicineName : "N/A";
 
-  let peakMonthIndex = 0;
-  let peakMonthRevenue = 0;
-  monthlyGrandTotals.forEach((m, idx) => {
-    if (m.revenue > peakMonthRevenue) {
-      peakMonthRevenue = m.revenue;
-      peakMonthIndex = idx;
+  let peakQuarterIndex = 0;
+  let peakQuarterRevenue = 0;
+  quarterlyGrandTotals.forEach((q, idx) => {
+    if (q.revenue > peakQuarterRevenue) {
+      peakQuarterRevenue = q.revenue;
+      peakQuarterIndex = idx;
     }
   });
 
-  const monthNames = [
-    "Jan", "Feb", "Mar", "Apr", "May", "Jun",
-    "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"
-  ];
-  const peakMonth =
+  const peakQuarter =
     grandTotalRevenue > 0
-      ? `${monthNames[peakMonthIndex]} (${selectedYear})`
+      ? `${QUARTER_LABELS[peakQuarterIndex]}`
       : "N/A";
 
+  const selectedFYLabel = `FY ${selectedFY}-${String(selectedFY + 1).slice(-2)}`;
+
   return {
-    year: selectedYear,
-    availableYears,
+    financialYear: selectedFY,
+    financialYearLabel: selectedFYLabel,
+    availableFinancialYears,
+    availableYears: availableFYs,
     summary: {
       grandTotalRevenue: Math.round(grandTotalRevenue * 100) / 100,
       grandTotalQuantity,
       topProduct,
-      peakMonth,
+      peakQuarter,
+      peakMonth: peakQuarter,
       totalProductsCount: productsList.length,
     },
-    monthlyGrandTotals: monthlyGrandTotals.map((m) => ({
-      ...m,
-      revenue: Math.round(m.revenue * 100) / 100,
-    })),
+    quarterlyGrandTotals,
+    monthlyGrandTotals: quarterlyGrandTotals,
     products: productsList,
   };
 };
