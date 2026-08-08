@@ -183,13 +183,34 @@ const generatePurchaseNumber = async (req, res) => {
     const prefix = `PUR-${shortYear}-`;
     const escapeRegex = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
-    const count = await Purchase.countDocuments({
+    const existingPurchases = await Purchase.find({
       purchaseNumber: {
         $regex: `^${escapeRegex(prefix)}`,
         $options: "i",
       },
+    })
+      .select("purchaseNumber")
+      .lean();
+
+    let maxNum = 0;
+    existingPurchases.forEach((p) => {
+      if (!p.purchaseNumber) return;
+      const parts = p.purchaseNumber.split("-");
+      const numPart = parseInt(parts[parts.length - 1], 10);
+      if (!isNaN(numPart) && numPart > maxNum) {
+        maxNum = numPart;
+      }
     });
-    const purchaseNumber = `${prefix}${String(count + 1).padStart(2, "0")}`;
+
+    let nextNum = maxNum + 1;
+    let purchaseNumber = `${prefix}${String(nextNum).padStart(2, "0")}`;
+
+    let exists = await Purchase.exists({ purchaseNumber });
+    while (exists) {
+      nextNum += 1;
+      purchaseNumber = `${prefix}${String(nextNum).padStart(2, "0")}`;
+      exists = await Purchase.exists({ purchaseNumber });
+    }
 
     return sendSuccess(res, {
       data: { purchaseNumber },

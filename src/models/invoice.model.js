@@ -130,6 +130,9 @@ const invoiceSchema = new mongoose.Schema(
       type: Date,
       default: Date.now,
     },
+    paidAt: {
+      type: Date,
+    },
     notes: {
       type: String,
       trim: true,

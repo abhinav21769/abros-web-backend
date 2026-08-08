@@ -165,6 +165,14 @@ const updateInvoice = async (req, res) => {
           ? "paid"
           : requestedStatus;
       updateData.status = newStatus;
+
+      if (newStatus === "paid") {
+        if (oldStatus !== "paid" || !existing.paidAt) {
+          updateData.paidAt = new Date();
+        }
+      } else {
+        updateData.paidAt = null;
+      }
       const oldItems = existing.items;
       const newItems = normalizedItems ?? oldItems;
 

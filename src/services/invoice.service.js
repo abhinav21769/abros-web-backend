@@ -41,43 +41,53 @@ const generateInvoiceNumberValue = async (invoiceType = "sale") => {
     }).format(new Date()),
   );
   const fullYear = String(year);
+  const isPurchase = type === "purchase";
+  const prefix = isPurchase ? `PO-${fullYear}-` : `AH-${fullYear}-`;
 
-  if (type === "purchase") {
-    const prefix = `PO-${fullYear}-`;
-    const legacyPrefixes = [
-      prefix,
-      `PO-${String(year).slice(-2)}-`,
-      `PUR-${String(year).slice(-2)}-`,
-      `PAH-${String(year).slice(-2)}-`,
-    ];
+  const legacyPrefixes = isPurchase
+    ? [
+        prefix,
+        `PO-${String(year).slice(-2)}-`,
+        `PUR-${String(year).slice(-2)}-`,
+        `PAH-${String(year).slice(-2)}-`,
+      ]
+    : [prefix, `AH-${String(year).slice(-2)}-`];
 
-    const count = await Invoice.countDocuments({
-      invoiceType: "purchase",
-      $or: legacyPrefixes.map((legacyPrefix) => ({
-        invoiceNumber: {
-          $regex: `^${escapeRegex(legacyPrefix)}`,
-          $options: "i",
-        },
-      })),
-    });
-
-    return `${prefix}${String(count + 1).padStart(3, "0")}`;
-  }
-
-  const prefix = `AH-${fullYear}-`;
-  const legacyPrefixes = [prefix, `AH-${String(year).slice(-2)}-`];
-
-  const count = await Invoice.countDocuments({
-    invoiceType: { $in: ["sale", null] },
+  const query = {
+    invoiceType: isPurchase ? "purchase" : { $in: ["sale", null] },
     $or: legacyPrefixes.map((legacyPrefix) => ({
       invoiceNumber: {
         $regex: `^${escapeRegex(legacyPrefix)}`,
         $options: "i",
       },
     })),
+  };
+
+  const existingInvoices = await Invoice.find(query)
+    .select("invoiceNumber")
+    .lean();
+
+  let maxNum = 0;
+  existingInvoices.forEach((inv) => {
+    if (!inv.invoiceNumber) return;
+    const parts = inv.invoiceNumber.split("-");
+    const numPart = parseInt(parts[parts.length - 1], 10);
+    if (!isNaN(numPart) && numPart > maxNum) {
+      maxNum = numPart;
+    }
   });
 
-  return `${prefix}${String(count + 1).padStart(3, "0")}`;
+  let nextNum = maxNum + 1;
+  let candidate = `${prefix}${String(nextNum).padStart(3, "0")}`;
+
+  let exists = await Invoice.exists({ invoiceNumber: candidate });
+  while (exists) {
+    nextNum += 1;
+    candidate = `${prefix}${String(nextNum).padStart(3, "0")}`;
+    exists = await Invoice.exists({ invoiceNumber: candidate });
+  }
+
+  return candidate;
 };
 
 const populateInvoice = async (invoice) => {
@@ -97,12 +107,15 @@ const createInvoiceRecord = async (payload) => {
   const invoiceNumber =
     rest.invoiceNumber || (await generateInvoiceNumberValue(type));
 
+  const paidAt = status === "paid" ? (rest.paidAt || new Date()) : undefined;
+
   const invoice = await withTransaction(async (session) => {
     const created = new Invoice({
       ...rest,
       invoiceNumber,
       invoiceType: type,
       status,
+      paidAt,
       invoiceDate: normalizeInvoiceDate(invoiceDate),
       items: normalizedItems,
       subtotal,
