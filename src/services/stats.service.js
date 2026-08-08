@@ -10,82 +10,104 @@ const getInventoryStatsData = async (days = 30) => {
   const futureDate = new Date();
   futureDate.setDate(today.getDate() + days);
 
-  const [facetResult, expiredMedicines, expiringMedicines] = await Promise.all([
-    Medicine.aggregate([
-      {
-        $facet: {
-          totalStock: [{ $count: "count" }],
-          expiredStock: [
-            { $match: { expiryDate: { $lt: today } } },
-            { $count: "count" },
-          ],
-          expiringStock: [
-            {
-              $match: {
-                expiryDate: { $gte: today, $lte: futureDate },
-              },
-            },
-            { $count: "count" },
-          ],
-          activeStock: [
-            { $match: { expiryDate: { $gte: today } } },
-            { $count: "count" },
-          ],
-          lowStockCount: [
-            { $match: { quantity: { $lt: 10 } } },
-            { $count: "count" },
-          ],
-          totalQuantity: [
-            { $group: { _id: null, total: { $sum: "$quantity" } } },
-          ],
-          totalInventoryValue: [
-            {
-              $group: {
-                _id: null,
-                total: { $sum: { $multiply: ["$rate", "$quantity"] } },
-              },
-            },
-          ],
-        },
-      },
-    ]),
-    Medicine.find({ expiryDate: { $lt: today } })
-      .select("name expiryDate quantity mrp manufacturer")
-      .sort({ expiryDate: -1 })
-      .limit(10)
-      .lean(),
-    Medicine.find({
-      expiryDate: { $gte: today, $lte: futureDate },
-    })
-      .select("name expiryDate quantity mrp manufacturer")
-      .sort({ expiryDate: 1 })
-      .limit(10)
-      .lean(),
-  ]);
+  const medicines = await Medicine.find().lean();
 
-  const facet = facetResult[0];
-  const expiredStock = facetCount(facet.expiredStock);
-  const expiringStock = facetCount(facet.expiringStock);
+  let totalProducts = medicines.length;
+  let activeStockCount = 0;
+  let expiredStockCount = 0;
+  let expiringStockCount = 0;
+  let lowStockCount = 0;
+  let totalQuantity = 0;
+  let totalInventoryValue = 0;
+
+  const expiredList = [];
+  const expiringList = [];
+
+  medicines.forEach((med) => {
+    const batches = med.batches && med.batches.length > 0
+      ? med.batches
+      : [
+          {
+            batchNumber: med.batchNumber || "BATCH-01",
+            expiryDate: med.expiryDate || new Date(),
+            mrp: med.mrp || med.rate || 0,
+            rate: med.rate || med.mrp || 0,
+            quantity: med.quantity || 0,
+          },
+        ];
+
+    const medTotalQty = batches.reduce((sum, b) => sum + (Number(b.quantity) || 0), 0);
+    totalQuantity += medTotalQty;
+
+    if (medTotalQty < 10) {
+      lowStockCount += 1;
+    }
+
+    let medHasActive = false;
+
+    batches.forEach((b) => {
+      const qty = Number(b.quantity) || 0;
+      const rate = Number(b.rate) || 0;
+      totalInventoryValue += qty * rate;
+
+      if (qty <= 0) return;
+
+      const exp = new Date(b.expiryDate);
+      if (exp < today) {
+        expiredStockCount += 1;
+        expiredList.push({
+          _id: med._id,
+          name: med.name,
+          batchNumber: b.batchNumber,
+          expiryDate: b.expiryDate,
+          quantity: b.quantity,
+          mrp: b.mrp,
+          manufacturer: med.manufacturer,
+        });
+      } else {
+        medHasActive = true;
+        if (exp >= today && exp <= futureDate) {
+          expiringStockCount += 1;
+          expiringList.push({
+            _id: med._id,
+            name: med.name,
+            batchNumber: b.batchNumber,
+            expiryDate: b.expiryDate,
+            quantity: b.quantity,
+            mrp: b.mrp,
+            manufacturer: med.manufacturer,
+          });
+        }
+      }
+    });
+
+    if (medHasActive) {
+      activeStockCount += 1;
+    }
+  });
+
+  expiredList.sort((a, b) => new Date(b.expiryDate) - new Date(a.expiryDate));
+  expiringList.sort((a, b) => new Date(a.expiryDate) - new Date(b.expiryDate));
 
   return {
     stats: {
-      totalStock: facetCount(facet.totalStock),
-      activeStock: facetCount(facet.activeStock),
-      expiredStock,
-      expiringStock,
+      totalStock: totalProducts,
+      activeStock: activeStockCount,
+      expiredStock: expiredStockCount,
+      expiringStock: expiringStockCount,
       expiringWithinDays: days,
-      lowStockCount: facetCount(facet.lowStockCount),
-      totalQuantity: facetSum(facet.totalQuantity),
-      totalInventoryValue: facetSum(facet.totalInventoryValue).toFixed(2),
+      lowStockCount,
+      totalQuantity,
+      totalInventoryValue: Math.round(totalInventoryValue * 100) / 100,
     },
     expiredMedicines: {
-      count: expiredStock,
-      list: expiredMedicines,
+      count: expiredStockCount,
+      list: expiredList.slice(0, 10),
     },
     expiringMedicines: {
-      count: expiringStock,
+      count: expiringStockCount,
       withinDays: days,
-      list: expiringMedicines,
+      list: expiringList.slice(0, 10),
     },
   };
 };

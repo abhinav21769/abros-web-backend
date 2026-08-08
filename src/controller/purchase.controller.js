@@ -32,6 +32,10 @@ function buildPurchaseTotals(items = []) {
     return {
       medicine: item.medicine,
       medicineName: item.medicineName,
+      batchNumber: item.batchNumber?.trim() || undefined,
+      expiryDate: item.expiryDate || undefined,
+      mrp: item.mrp != null ? Number(item.mrp) : undefined,
+      ptr: item.ptr != null ? Number(item.ptr) : undefined,
       quantity,
       rate,
       amount,

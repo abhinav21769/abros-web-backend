@@ -12,6 +12,21 @@ const purchaseItemSchema = new mongoose.Schema(
       required: [true, "Medicine name is required"],
       trim: true,
     },
+    batchNumber: {
+      type: String,
+      trim: true,
+    },
+    expiryDate: {
+      type: Date,
+    },
+    mrp: {
+      type: Number,
+      min: [0, "MRP cannot be negative"],
+    },
+    ptr: {
+      type: Number,
+      min: [0, "PTR cannot be negative"],
+    },
     quantity: {
       type: Number,
       required: [true, "Quantity is required"],

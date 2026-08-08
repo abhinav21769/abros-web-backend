@@ -314,9 +314,16 @@ async function buildInvoicePayload(parsed) {
       throw new AgentBillError(`Invalid rate for ${medicine.name}.`);
     }
 
+    const primaryBatch = medicine.batches && medicine.batches.length > 0
+      ? (medicine.batches.find((b) => b.quantity > 0) || medicine.batches[0])
+      : null;
+
     items.push({
       medicine: medicine._id,
       medicineName: medicine.name,
+      batchNumber: item.batchNumber || primaryBatch?.batchNumber || medicine.batchNumber || undefined,
+      expiryDate: primaryBatch?.expiryDate || medicine.expiryDate || undefined,
+      mrp: primaryBatch?.mrp ?? medicine.mrp ?? undefined,
       hsn: medicine.hsn || undefined,
       gstRate: Number(medicine.gstRate) || 5,
       discount: Number(item.discount) || 0,

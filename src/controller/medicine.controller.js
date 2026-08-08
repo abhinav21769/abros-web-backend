@@ -55,6 +55,7 @@ const getAllMedicines = async (req, res) => {
       name,
       packagingType,
       expired,
+      batchNumber,
     } = req.query;
 
     const filter = {};
@@ -63,14 +64,27 @@ const getAllMedicines = async (req, res) => {
       filter.name = { $regex: name, $options: "i" };
     }
 
+    if (batchNumber) {
+      filter.$or = [
+        { batchNumber: { $regex: batchNumber, $options: "i" } },
+        { "batches.batchNumber": { $regex: batchNumber, $options: "i" } },
+      ];
+    }
+
     if (packagingType) {
       filter.packagingType = packagingType;
     }
 
     if (expired === "true") {
-      filter.expiryDate = { $lt: new Date() };
+      filter.$or = [
+        { expiryDate: { $lt: new Date() } },
+        { "batches.expiryDate": { $lt: new Date() } },
+      ];
     } else if (expired === "false") {
-      filter.expiryDate = { $gte: new Date() };
+      filter.$or = [
+        { expiryDate: { $gte: new Date() } },
+        { "batches.expiryDate": { $gte: new Date() } },
+      ];
     }
 
     const skip = (page - 1) * limit;
@@ -138,34 +152,28 @@ const updateMedicine = async (req, res) => {
       }
 
       const oldQuantity = existing.quantity;
-      const updated = await Medicine.findByIdAndUpdate(req.params.id, req.body, {
-        new: true,
-        runValidators: true,
-        session,
-      });
+      Object.assign(existing, req.body);
+      await existing.save({ session });
 
-      if (
-        req.body.quantity != null &&
-        Number(updated.quantity) !== Number(oldQuantity)
-      ) {
-        const delta = Number(updated.quantity) - Number(oldQuantity);
+      if (Number(existing.quantity) !== Number(oldQuantity)) {
+        const delta = Number(existing.quantity) - Number(oldQuantity);
         await recordLedgerEntry(
           {
-            medicine: updated._id,
-            medicineName: updated.name,
+            medicine: existing._id,
+            medicineName: existing.name,
             type: "adjustment",
             quantityChange: delta,
-            balanceAfter: updated.quantity,
+            balanceAfter: existing.quantity,
             referenceType: "medicine",
-            referenceId: updated._id,
-            referenceLabel: updated.name,
+            referenceId: existing._id,
+            referenceLabel: existing.name,
             notes: "Manual stock adjustment",
           },
           session,
         );
       }
 
-      return updated;
+      return existing;
     });
 
     if (!medicine) {

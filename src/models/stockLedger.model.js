@@ -13,6 +13,10 @@ const stockLedgerSchema = new mongoose.Schema(
       required: true,
       trim: true,
     },
+    batchNumber: {
+      type: String,
+      trim: true,
+    },
     type: {
       type: String,
       enum: ["purchase", "sale", "adjustment", "opening"],

@@ -20,6 +20,7 @@ const getLedgerEntries = async (req, res) => {
     if (search) {
       filter.$or = [
         { medicineName: { $regex: search, $options: "i" } },
+        { batchNumber: { $regex: search, $options: "i" } },
         { referenceLabel: { $regex: search, $options: "i" } },
       ];
     }

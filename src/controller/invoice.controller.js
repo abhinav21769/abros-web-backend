@@ -12,11 +12,10 @@ const {
 } = require("../services/invoice.service");
 const {
   InsufficientStockError,
-  applyInvoiceStockChanges,
-  computeStockChanges,
   deductStockForItems,
   isInvoiceStockActive,
   restoreStockForItems,
+  syncInvoiceStockChanges,
   withTransaction,
 } = require("../services/inventory.service");
 
@@ -176,16 +175,12 @@ const updateInvoice = async (req, res) => {
       const oldItems = existing.items;
       const newItems = normalizedItems ?? oldItems;
 
-      const stockChanges = computeStockChanges(
+      await syncInvoiceStockChanges(
         oldItems,
         oldStatus,
         newItems,
         newStatus,
         existing.invoiceType || "sale",
-      );
-      await applyInvoiceStockChanges(
-        existing.invoiceType || "sale",
-        stockChanges,
         session,
         {
           referenceType: "invoice",
