@@ -18,12 +18,16 @@ const { ERROR_CODES, sendSuccess, sendError } = require("./src/utils/response");
 const { ERRORS } = require("./src/utils/messages");
 const { startTelegramPolling } = require("./src/services/telegramBot.service");
 
+const logger = require("./src/utils/logger");
+const requestLogger = require("./src/middleware/requestLogger");
+
 const app = express();
 const isProduction = process.env.NODE_ENV === "production";
 
 app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+app.use(requestLogger);
 
 if (!isProduction) {
   app.use("/api-docs", swaggerUi.serve, swaggerUi.setup(swaggerDocument));
@@ -65,7 +69,7 @@ app.use("/api/dashboard", authenticate, dashboardRoutes);
 app.use("/api/gst", authenticate, gstRoutes);
 
 app.use((err, req, res, next) => {
-  console.error(err.stack);
+  logger.error("Unhandled API Error", err);
   return sendError(res, {
     message: ERRORS.generic,
     code: ERROR_CODES.INTERNAL_ERROR,
