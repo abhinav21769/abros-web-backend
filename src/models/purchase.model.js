@@ -76,7 +76,6 @@ const purchaseSchema = new mongoose.Schema(
   },
 );
 
-purchaseSchema.index({ purchaseNumber: 1 });
 purchaseSchema.index({ purchaseDate: -1 });
 
 const Purchase = mongoose.model("Purchase", purchaseSchema);

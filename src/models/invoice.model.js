@@ -140,7 +140,6 @@ const invoiceSchema = new mongoose.Schema(
   },
 );
 
-invoiceSchema.index({ invoiceNumber: 1 });
 invoiceSchema.index({ invoiceType: 1, invoiceDate: -1 });
 invoiceSchema.index({ customer: 1, invoiceDate: -1 });
 invoiceSchema.index({ status: 1 });
