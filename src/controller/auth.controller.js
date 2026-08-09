@@ -14,11 +14,14 @@ const signToken = (userId) => {
   });
 };
 
+const logger = require("../utils/logger");
+
 const login = async (req, res) => {
   try {
     const { username, password } = req.body;
 
     if (!username || !password) {
+      logger.warn("Login attempt missing username or password");
       return sendError(res, {
         message: ERRORS.auth.invalidCredentials,
         code: ERROR_CODES.VALIDATION_ERROR,
@@ -32,6 +35,7 @@ const login = async (req, res) => {
     }).select("+password");
 
     if (!user || !user.isActive) {
+      logger.warn(`Failed login attempt for unknown/inactive username: '${username}'`);
       return sendError(res, {
         message: ERRORS.auth.invalidCredentials,
         code: ERROR_CODES.UNAUTHORIZED,
@@ -42,6 +46,7 @@ const login = async (req, res) => {
 
     const isMatch = await user.comparePassword(password);
     if (!isMatch) {
+      logger.warn(`Failed login attempt for user: '${username}' (Invalid password)`);
       return sendError(res, {
         message: ERRORS.auth.invalidCredentials,
         code: ERROR_CODES.UNAUTHORIZED,
