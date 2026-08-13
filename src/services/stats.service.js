@@ -309,9 +309,10 @@ const getProductWiseMonthlySalesData = async ({ year, financialYear, search } = 
   const productMap = new Map();
   let grandTotalRevenue = 0;
   let grandTotalQuantity = 0;
+  let grandTotalFree = 0;
   const quarterlyGrandTotals = Array(4)
     .fill(0)
-    .map(() => ({ quantity: 0, revenue: 0 }));
+    .map(() => ({ quantity: 0, free: 0, revenue: 0 }));
 
   const QUARTER_LABELS = [
     "Q1 (Apr – Jun)",
@@ -341,18 +342,20 @@ const getProductWiseMonthlySalesData = async ({ year, financialYear, search } = 
     const revenueVal = Math.round(row.totalRevenue * 100) / 100;
 
     prod.quarterlyData[qIdx].quantity += row.totalQuantity;
-    prod.quarterlyData[qIdx].free += row.totalFree;
+    prod.quarterlyData[qIdx].free += row.totalFree || 0;
     prod.quarterlyData[qIdx].revenue = Math.round((prod.quarterlyData[qIdx].revenue + revenueVal) * 100) / 100;
     prod.quarterlyData[qIdx].orderCount += row.invoiceIds.length;
 
     prod.totalQuantity += row.totalQuantity;
-    prod.totalFree += row.totalFree;
+    prod.totalFree += row.totalFree || 0;
     prod.totalRevenue += row.totalRevenue;
 
     grandTotalQuantity += row.totalQuantity;
+    grandTotalFree += row.totalFree || 0;
     grandTotalRevenue += row.totalRevenue;
 
     quarterlyGrandTotals[qIdx].quantity += row.totalQuantity;
+    quarterlyGrandTotals[qIdx].free += row.totalFree || 0;
     quarterlyGrandTotals[qIdx].revenue = Math.round((quarterlyGrandTotals[qIdx].revenue + revenueVal) * 100) / 100;
   });
 
@@ -389,6 +392,7 @@ const getProductWiseMonthlySalesData = async ({ year, financialYear, search } = 
     summary: {
       grandTotalRevenue: Math.round(grandTotalRevenue * 100) / 100,
       grandTotalQuantity,
+      grandTotalFree,
       topProduct,
       peakQuarter,
       peakMonth: peakQuarter,
