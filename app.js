@@ -1,4 +1,6 @@
+require("./instrument.js");
 require("dotenv").config();
+const Sentry = require("@sentry/node");
 const express = require("express");
 const cors = require("cors");
 const swaggerUi = require("swagger-ui-express");
@@ -37,6 +39,7 @@ app.get("/health", (req, res) => {
   res.status(200).send("ok");
 });
 
+
 app.get("/", (req, res) => {
   return sendSuccess(res, {
     message: "Abros Healthcare - Medicine Inventory Management System",
@@ -67,6 +70,8 @@ app.use("/api/purchases", authenticate, purchaseRoutes);
 app.use("/api/ledger", authenticate, ledgerRoutes);
 app.use("/api/dashboard", authenticate, dashboardRoutes);
 app.use("/api/gst", authenticate, gstRoutes);
+
+Sentry.setupExpressErrorHandler(app);
 
 app.use((err, req, res, next) => {
   logger.error("Unhandled API Error", err);

@@ -1,5 +1,6 @@
 const mongoose = require("mongoose");
 require("../models/customer.model");
+const logger = require("../utils/logger");
 
 async function ensureCustomerDataAndIndexes() {
   const collection = mongoose.connection.collection("customers");
@@ -14,7 +15,7 @@ async function ensureCustomerDataAndIndexes() {
   );
 
   if (gstinCleanup.modifiedCount || dlCleanup.modifiedCount) {
-    console.log(
+    logger.info(
       `Customer cleanup: removed empty gstin on ${gstinCleanup.modifiedCount}, empty dlNo on ${dlCleanup.modifiedCount}`,
     );
   }
@@ -34,9 +35,9 @@ const connectDB = async () => {
     );
 
     await ensureCustomerDataAndIndexes();
-    console.log("MongoDB connected successfully");
+    logger.info("MongoDB connected successfully");
   } catch (error) {
-    console.error("MongoDB connection error:", error);
+    logger.error("MongoDB connection error", error);
     process.exit(1);
   }
 };

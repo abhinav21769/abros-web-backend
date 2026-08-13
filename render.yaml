@@ -27,3 +27,5 @@ services:
         sync: false
       - key: GEMINI_MODEL
         value: gemini-2.5-flash
+      - key: SENTRY_DSN
+        sync: false

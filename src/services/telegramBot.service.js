@@ -2,6 +2,7 @@ const Customer = require("../models/customer.model");
 const Medicine = require("../models/medicine.model");
 const { createInvoiceRecord } = require("./invoice.service");
 const { buildInvoicePdf } = require("../utils/fullInvoicePdf");
+const logger = require("../utils/logger");
 
 const TELEGRAM_API = "https://api.telegram.org/bot";
 const GEMINI_API =
@@ -400,12 +401,12 @@ async function startTelegramPolling() {
   }
 
   if (!isConfigured()) {
-    console.log("Telegram polling skipped: TELEGRAM_BOT_TOKEN missing.");
+    logger.info("Telegram polling skipped: TELEGRAM_BOT_TOKEN missing.");
     return;
   }
 
   pollingStarted = true;
-  console.log("Telegram billing bot polling started.");
+  logger.info("Telegram billing bot polling started.");
 
   while (pollingStarted) {
     try {
@@ -425,7 +426,7 @@ async function startTelegramPolling() {
         await processTelegramUpdate(update);
       }
     } catch (error) {
-      console.error("Telegram polling error:", error.message);
+      logger.error("Telegram polling error", error);
       await new Promise((resolve) => setTimeout(resolve, 5000));
     }
   }

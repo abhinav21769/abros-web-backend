@@ -1,4 +1,5 @@
 const Sentry = require("@sentry/node");
+
 const { Logtail } = require("@logtail/node");
 
 const logtailToken = process.env.LOGTAIL_TOKEN || process.env.LOGTAIL_SOURCE_TOKEN;
@@ -11,19 +12,6 @@ if (logtailToken) {
     console.log("🪵 Logtail/BetterStack logging enabled.");
   } catch (err) {
     console.warn("⚠️ Failed to initialize Logtail:", err.message);
-  }
-}
-
-if (sentryDsn) {
-  try {
-    Sentry.init({
-      dsn: sentryDsn,
-      environment: process.env.NODE_ENV || "development",
-      tracesSampleRate: 1.0,
-    });
-    console.log("🛡️ Sentry error tracking enabled.");
-  } catch (err) {
-    console.warn("⚠️ Failed to initialize Sentry:", err.message);
   }
 }
 

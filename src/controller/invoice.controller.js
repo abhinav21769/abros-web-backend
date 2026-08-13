@@ -1,6 +1,7 @@
 const Invoice = require("../models/invoice.model");
 const { ERROR_CODES, sendSuccess, sendError } = require("../utils/response");
 const { SUCCESS, ERRORS, getUserMessage } = require("../utils/messages");
+const logger = require("../utils/logger");
 
 const { buildInvoiceTotals } = require("../utils/invoiceTax");
 const {
@@ -314,7 +315,7 @@ const generateInvoiceNumber = async (req, res) => {
       },
     });
   } catch (error) {
-    console.error("Generate Invoice Number Error:", error);
+    logger.error("Generate Invoice Number Error", error);
 
     return sendError(res, {
       message: ERRORS.loadFailed.invoiceNumber,
