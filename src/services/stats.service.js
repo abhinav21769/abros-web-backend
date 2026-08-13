@@ -714,15 +714,16 @@ const getCustomerProductMonthlySalesData = async ({ year, financialYear, custome
   const customerMap = new Map();
   let grandTotalRevenue = 0;
   let grandTotalQuantity = 0;
+  let grandTotalFree = 0;
   let topPair = { name: "N/A", revenue: 0 };
 
   const monthlyGrandTotals = Array(12)
     .fill(0)
-    .map((_, i) => ({ monthName: MONTH_LABELS[i], quantity: 0, revenue: 0 }));
+    .map((_, i) => ({ monthName: MONTH_LABELS[i], quantity: 0, free: 0, revenue: 0 }));
 
   const quarterlyGrandTotals = Array(4)
     .fill(0)
-    .map((_, i) => ({ label: `Q${i + 1}`, quantity: 0, revenue: 0 }));
+    .map((_, i) => ({ label: `Q${i + 1}`, quantity: 0, free: 0, revenue: 0 }));
 
   aggregateResults.forEach((row) => {
     const custIdStr = row._id.customerId ? String(row._id.customerId) : "walk-in";
@@ -743,12 +744,13 @@ const getCustomerProductMonthlySalesData = async ({ year, financialYear, custome
         gstin: row.gstin || "",
         totalRevenue: 0,
         totalQuantity: 0,
+        totalFree: 0,
         monthlyTotals: Array(12)
           .fill(0)
-          .map((_, i) => ({ monthName: MONTH_LABELS[i], quantity: 0, revenue: 0 })),
+          .map((_, i) => ({ monthName: MONTH_LABELS[i], quantity: 0, free: 0, revenue: 0 })),
         quarterlyTotals: Array(4)
           .fill(0)
-          .map((_, i) => ({ label: `Q${i + 1}`, quantity: 0, revenue: 0 })),
+          .map((_, i) => ({ label: `Q${i + 1}`, quantity: 0, free: 0, revenue: 0 })),
         productsMap: new Map(),
       });
     }
@@ -756,48 +758,59 @@ const getCustomerProductMonthlySalesData = async ({ year, financialYear, custome
     const custObj = customerMap.get(custKey);
     const revVal = Math.round(row.totalRevenue * 100) / 100;
     const qtyVal = row.totalQuantity || 0;
+    const freeVal = row.totalFree || 0;
 
     if (!custObj.productsMap.has(prodName)) {
       custObj.productsMap.set(prodName, {
         medicineName: prodName,
         totalRevenue: 0,
         totalQuantity: 0,
+        totalFree: 0,
         monthlyData: Array(12)
           .fill(0)
-          .map((_, i) => ({ monthName: MONTH_LABELS[i], quantity: 0, revenue: 0 })),
+          .map((_, i) => ({ monthName: MONTH_LABELS[i], quantity: 0, free: 0, revenue: 0 })),
         quarterlyData: Array(4)
           .fill(0)
-          .map((_, i) => ({ label: `Q${i + 1}`, quantity: 0, revenue: 0 })),
+          .map((_, i) => ({ label: `Q${i + 1}`, quantity: 0, free: 0, revenue: 0 })),
       });
     }
 
     const prodObj = custObj.productsMap.get(prodName);
 
     prodObj.monthlyData[fyMonthIdx].quantity += qtyVal;
+    prodObj.monthlyData[fyMonthIdx].free += freeVal;
     prodObj.monthlyData[fyMonthIdx].revenue = Math.round((prodObj.monthlyData[fyMonthIdx].revenue + revVal) * 100) / 100;
 
     prodObj.quarterlyData[qIdx].quantity += qtyVal;
+    prodObj.quarterlyData[qIdx].free += freeVal;
     prodObj.quarterlyData[qIdx].revenue = Math.round((prodObj.quarterlyData[qIdx].revenue + revVal) * 100) / 100;
 
     prodObj.totalQuantity += qtyVal;
+    prodObj.totalFree += freeVal;
     prodObj.totalRevenue += revVal;
 
     custObj.monthlyTotals[fyMonthIdx].quantity += qtyVal;
+    custObj.monthlyTotals[fyMonthIdx].free += freeVal;
     custObj.monthlyTotals[fyMonthIdx].revenue = Math.round((custObj.monthlyTotals[fyMonthIdx].revenue + revVal) * 100) / 100;
 
     custObj.quarterlyTotals[qIdx].quantity += qtyVal;
+    custObj.quarterlyTotals[qIdx].free += freeVal;
     custObj.quarterlyTotals[qIdx].revenue = Math.round((custObj.quarterlyTotals[qIdx].revenue + revVal) * 100) / 100;
 
     custObj.totalQuantity += qtyVal;
+    custObj.totalFree += freeVal;
     custObj.totalRevenue += revVal;
 
     grandTotalQuantity += qtyVal;
+    grandTotalFree += freeVal;
     grandTotalRevenue += revVal;
 
     monthlyGrandTotals[fyMonthIdx].quantity += qtyVal;
+    monthlyGrandTotals[fyMonthIdx].free += freeVal;
     monthlyGrandTotals[fyMonthIdx].revenue = Math.round((monthlyGrandTotals[fyMonthIdx].revenue + revVal) * 100) / 100;
 
     quarterlyGrandTotals[qIdx].quantity += qtyVal;
+    quarterlyGrandTotals[qIdx].free += freeVal;
     quarterlyGrandTotals[qIdx].revenue = Math.round((quarterlyGrandTotals[qIdx].revenue + revVal) * 100) / 100;
 
     if (prodObj.totalRevenue > topPair.revenue) {
