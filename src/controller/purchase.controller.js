@@ -1,6 +1,7 @@
 const Purchase = require("../models/purchase.model");
 const { ERROR_CODES, sendSuccess, sendError } = require("../utils/response");
 const { SUCCESS, ERRORS, getUserMessage } = require("../utils/messages");
+const logger = require("../utils/logger");
 const {
   addStockForItems,
   withTransaction,
@@ -85,6 +86,7 @@ const createPurchase = async (req, res) => {
       statusCode: 201,
     });
   } catch (error) {
+    logger.error("Create purchase error", error);
     return sendError(res, {
       message: ERRORS.saveFailed.purchase,
       code:

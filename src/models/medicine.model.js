@@ -43,7 +43,6 @@ const medicineSchema = new mongoose.Schema(
       type: String,
       required: [true, "Medicine name is required"],
       trim: true,
-      index: true,
     },
     packagingType: {
       type: String,

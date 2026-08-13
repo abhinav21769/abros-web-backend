@@ -55,7 +55,19 @@ async function withTransaction(fn) {
     await session.commitTransaction();
     return result;
   } catch (error) {
-    await session.abortTransaction();
+    try {
+      await session.abortTransaction();
+    } catch (_) {}
+
+    const isTxnNotSupported =
+      error.message &&
+      (error.message.includes("Transaction numbers are only allowed on a replica set") ||
+        error.message.includes("Transactions are not supported"));
+
+    if (isTxnNotSupported) {
+      return fn(null);
+    }
+
     throw error;
   } finally {
     session.endSession();
