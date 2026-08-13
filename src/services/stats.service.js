@@ -410,10 +410,481 @@ const getDashboardStatsData = async (days = 30) => {
   return { inventory, customers, invoices };
 };
 
+const getCustomerWiseSalesData = async ({ year, financialYear, search } = {}) => {
+  const currentFY = getCurrentFinancialYear();
+  const selectedFY = financialYear
+    ? parseInt(financialYear, 10)
+    : year
+    ? parseInt(year, 10)
+    : currentFY;
+
+  const startDate = new Date(Date.UTC(selectedFY, 3, 1, 0, 0, 0));
+  const endDate = new Date(Date.UTC(selectedFY + 1, 2, 31, 23, 59, 59, 999));
+
+  const matchStage = {
+    invoiceType: { $ne: "purchase" },
+    status: { $in: ["paid", "pending"] },
+    invoiceDate: { $gte: startDate, $lte: endDate },
+  };
+
+  const pipeline = [
+    { $match: matchStage },
+    {
+      $lookup: {
+        from: "customers",
+        localField: "customer",
+        foreignField: "_id",
+        as: "customerDoc",
+      },
+    },
+    { $unwind: { path: "$customerDoc", preserveNullAndEmptyArrays: true } },
+    {
+      $group: {
+        _id: {
+          customerId: "$customer",
+          customerName: { $ifNull: ["$customerDoc.name", "Walk-in Customer"] },
+          month: { $month: "$invoiceDate" },
+        },
+        contact: { $first: "$customerDoc.contact" },
+        address: { $first: "$customerDoc.address" },
+        gstin: { $first: "$customerDoc.gstin" },
+        totalRevenue: { $sum: "$total" },
+        paidRevenue: {
+          $sum: { $cond: [{ $eq: ["$status", "paid"] }, "$total", 0] },
+        },
+        pendingRevenue: {
+          $sum: { $cond: [{ $eq: ["$status", "pending"] }, "$total", 0] },
+        },
+        invoiceCount: { $sum: 1 },
+        paidCount: {
+          $sum: { $cond: [{ $eq: ["$status", "paid"] }, 1, 0] },
+        },
+        pendingCount: {
+          $sum: { $cond: [{ $eq: ["$status", "pending"] }, 1, 0] },
+        },
+        invoiceIds: { $addToSet: "$_id" },
+      },
+    },
+  ];
+
+  const aggregateResults = await Invoice.aggregate(pipeline);
+
+  const fyResults = await Invoice.aggregate([
+    { $match: { invoiceType: { $ne: "purchase" }, status: { $in: ["paid", "pending"] } } },
+    {
+      $project: {
+        financialYear: {
+          $cond: {
+            if: { $gte: [{ $month: "$invoiceDate" }, 4] },
+            then: { $year: "$invoiceDate" },
+            else: { $subtract: [{ $year: "$invoiceDate" }, 1] },
+          },
+        },
+      },
+    },
+    { $group: { _id: "$financialYear" } },
+    { $sort: { _id: -1 } },
+  ]);
+
+  let availableFYs = fyResults.map((r) => r._id).filter(Boolean);
+  if (!availableFYs.includes(selectedFY)) availableFYs.push(selectedFY);
+  if (!availableFYs.includes(currentFY)) availableFYs.push(currentFY);
+  availableFYs.sort((a, b) => b - a);
+
+  const availableFinancialYears = availableFYs.map((fy) => ({
+    value: fy,
+    label: `FY ${fy}-${String(fy + 1).slice(-2)}`,
+  }));
+
+  const customerMap = new Map();
+  let grandTotalRevenue = 0;
+  let grandTotalPaidRevenue = 0;
+  let grandTotalPendingRevenue = 0;
+  let grandTotalInvoices = 0;
+  const quarterlyGrandTotals = Array(4)
+    .fill(0)
+    .map(() => ({ revenue: 0, paidRevenue: 0, pendingRevenue: 0, invoiceCount: 0 }));
+
+  const QUARTER_LABELS = [
+    "Q1 (Apr – Jun)",
+    "Q2 (Jul – Sep)",
+    "Q3 (Oct – Dec)",
+    "Q4 (Jan – Mar)",
+  ];
+
+  aggregateResults.forEach((row) => {
+    const custIdStr = row._id.customerId ? String(row._id.customerId) : "walk-in";
+    const custName = row._id.customerName || "Walk-in Customer";
+    const month = row._id.month;
+    const qIdx = getQuarterIndex(month);
+
+    const key = custIdStr !== "walk-in" ? custIdStr : `walk-in_${custName}`;
+
+    if (!customerMap.has(key)) {
+      customerMap.set(key, {
+        customerId: row._id.customerId || null,
+        customerName: custName,
+        contact: row.contact || "",
+        address: row.address || "",
+        gstin: row.gstin || "",
+        totalRevenue: 0,
+        paidRevenue: 0,
+        pendingRevenue: 0,
+        totalInvoices: 0,
+        paidInvoices: 0,
+        pendingInvoices: 0,
+        quarterlyData: Array(4)
+          .fill(0)
+          .map(() => ({ revenue: 0, paidRevenue: 0, pendingRevenue: 0, invoiceCount: 0 })),
+      });
+    }
+
+    const cust = customerMap.get(key);
+    const revVal = Math.round(row.totalRevenue * 100) / 100;
+    const paidRevVal = Math.round(row.paidRevenue * 100) / 100;
+    const pendingRevVal = Math.round(row.pendingRevenue * 100) / 100;
+
+    cust.quarterlyData[qIdx].revenue = Math.round((cust.quarterlyData[qIdx].revenue + revVal) * 100) / 100;
+    cust.quarterlyData[qIdx].paidRevenue = Math.round((cust.quarterlyData[qIdx].paidRevenue + paidRevVal) * 100) / 100;
+    cust.quarterlyData[qIdx].pendingRevenue = Math.round((cust.quarterlyData[qIdx].pendingRevenue + pendingRevVal) * 100) / 100;
+    cust.quarterlyData[qIdx].invoiceCount += row.invoiceCount;
+
+    cust.totalRevenue += row.totalRevenue;
+    cust.paidRevenue += row.paidRevenue;
+    cust.pendingRevenue += row.pendingRevenue;
+    cust.totalInvoices += row.invoiceCount;
+    cust.paidInvoices += row.paidCount;
+    cust.pendingInvoices += row.pendingCount;
+
+    grandTotalRevenue += row.totalRevenue;
+    grandTotalPaidRevenue += row.paidRevenue;
+    grandTotalPendingRevenue += row.pendingRevenue;
+    grandTotalInvoices += row.invoiceCount;
+
+    quarterlyGrandTotals[qIdx].revenue = Math.round((quarterlyGrandTotals[qIdx].revenue + revVal) * 100) / 100;
+    quarterlyGrandTotals[qIdx].paidRevenue = Math.round((quarterlyGrandTotals[qIdx].paidRevenue + paidRevVal) * 100) / 100;
+    quarterlyGrandTotals[qIdx].pendingRevenue = Math.round((quarterlyGrandTotals[qIdx].pendingRevenue + pendingRevVal) * 100) / 100;
+    quarterlyGrandTotals[qIdx].invoiceCount += row.invoiceCount;
+  });
+
+  let customersList = Array.from(customerMap.values()).map((c) => ({
+    ...c,
+    totalRevenue: Math.round(c.totalRevenue * 100) / 100,
+    paidRevenue: Math.round(c.paidRevenue * 100) / 100,
+    pendingRevenue: Math.round(c.pendingRevenue * 100) / 100,
+  }));
+
+  if (search && search.trim()) {
+    const q = search.trim().toLowerCase();
+    customersList = customersList.filter(
+      (c) =>
+        c.customerName.toLowerCase().includes(q) ||
+        (c.contact && c.contact.toLowerCase().includes(q)) ||
+        (c.gstin && c.gstin.toLowerCase().includes(q)) ||
+        (c.address && c.address.toLowerCase().includes(q))
+    );
+  }
+
+  customersList.sort((a, b) => b.totalRevenue - a.totalRevenue);
+
+  const topCustomer = customersList.length > 0 ? customersList[0].customerName : "N/A";
+  const topCustomerAmount = customersList.length > 0 ? customersList[0].totalRevenue : 0;
+
+  let peakQuarterIndex = 0;
+  let peakQuarterRevenue = 0;
+  quarterlyGrandTotals.forEach((q, idx) => {
+    if (q.revenue > peakQuarterRevenue) {
+      peakQuarterRevenue = q.revenue;
+      peakQuarterIndex = idx;
+    }
+  });
+
+  const peakQuarter = grandTotalRevenue > 0 ? `${QUARTER_LABELS[peakQuarterIndex]}` : "N/A";
+  const selectedFYLabel = `FY ${selectedFY}-${String(selectedFY + 1).slice(-2)}`;
+
+  return {
+    financialYear: selectedFY,
+    financialYearLabel: selectedFYLabel,
+    availableFinancialYears,
+    availableYears: availableFYs,
+    summary: {
+      grandTotalRevenue: Math.round(grandTotalRevenue * 100) / 100,
+      grandTotalPaidRevenue: Math.round(grandTotalPaidRevenue * 100) / 100,
+      grandTotalPendingRevenue: Math.round(grandTotalPendingRevenue * 100) / 100,
+      grandTotalInvoices,
+      topCustomer,
+      topCustomerAmount,
+      peakQuarter,
+      activeCustomersCount: customersList.length,
+    },
+    quarterlyGrandTotals,
+    customers: customersList,
+  };
+};
+
+function getFYMonthIndex(month) {
+  return month >= 4 ? month - 4 : month + 8;
+}
+
+const MONTH_LABELS = [
+  "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec", "Jan", "Feb", "Mar"
+];
+
+const getCustomerProductMonthlySalesData = async ({ year, financialYear, customerId, search } = {}) => {
+  const currentFY = getCurrentFinancialYear();
+  const selectedFY = financialYear
+    ? parseInt(financialYear, 10)
+    : year
+    ? parseInt(year, 10)
+    : currentFY;
+
+  const startDate = new Date(Date.UTC(selectedFY, 3, 1, 0, 0, 0));
+  const endDate = new Date(Date.UTC(selectedFY + 1, 2, 31, 23, 59, 59, 999));
+
+  const matchStage = {
+    invoiceType: { $ne: "purchase" },
+    status: { $in: ["paid", "pending"] },
+    invoiceDate: { $gte: startDate, $lte: endDate },
+  };
+
+  if (customerId && customerId !== "all" && customerId !== "walk-in") {
+    matchStage.customer = new (require("mongoose").Types.ObjectId)(customerId);
+  }
+
+  const pipeline = [
+    { $match: matchStage },
+    { $unwind: "$items" },
+    {
+      $lookup: {
+        from: "customers",
+        localField: "customer",
+        foreignField: "_id",
+        as: "customerDoc",
+      },
+    },
+    { $unwind: { path: "$customerDoc", preserveNullAndEmptyArrays: true } },
+    {
+      $group: {
+        _id: {
+          customerId: "$customer",
+          customerName: { $ifNull: ["$customerDoc.name", "Walk-in Customer"] },
+          medicineName: "$items.medicineName",
+          month: { $month: "$invoiceDate" },
+        },
+        contact: { $first: "$customerDoc.contact" },
+        address: { $first: "$customerDoc.address" },
+        gstin: { $first: "$customerDoc.gstin" },
+        totalQuantity: { $sum: "$items.quantity" },
+        totalFree: { $sum: "$items.free" },
+        totalRevenue: { $sum: "$items.amount" },
+        invoiceIds: { $addToSet: "$_id" },
+      },
+    },
+  ];
+
+  const aggregateResults = await Invoice.aggregate(pipeline);
+
+  const fyResults = await Invoice.aggregate([
+    { $match: { invoiceType: { $ne: "purchase" }, status: { $in: ["paid", "pending"] } } },
+    {
+      $project: {
+        financialYear: {
+          $cond: {
+            if: { $gte: [{ $month: "$invoiceDate" }, 4] },
+            then: { $year: "$invoiceDate" },
+            else: { $subtract: [{ $year: "$invoiceDate" }, 1] },
+          },
+        },
+      },
+    },
+    { $group: { _id: "$financialYear" } },
+    { $sort: { _id: -1 } },
+  ]);
+
+  let availableFYs = fyResults.map((r) => r._id).filter(Boolean);
+  if (!availableFYs.includes(selectedFY)) availableFYs.push(selectedFY);
+  if (!availableFYs.includes(currentFY)) availableFYs.push(currentFY);
+  availableFYs.sort((a, b) => b - a);
+
+  const availableFinancialYears = availableFYs.map((fy) => ({
+    value: fy,
+    label: `FY ${fy}-${String(fy + 1).slice(-2)}`,
+  }));
+
+  const customerMap = new Map();
+  let grandTotalRevenue = 0;
+  let grandTotalQuantity = 0;
+  let topPair = { name: "N/A", revenue: 0 };
+
+  const monthlyGrandTotals = Array(12)
+    .fill(0)
+    .map((_, i) => ({ monthName: MONTH_LABELS[i], quantity: 0, revenue: 0 }));
+
+  const quarterlyGrandTotals = Array(4)
+    .fill(0)
+    .map((_, i) => ({ label: `Q${i + 1}`, quantity: 0, revenue: 0 }));
+
+  aggregateResults.forEach((row) => {
+    const custIdStr = row._id.customerId ? String(row._id.customerId) : "walk-in";
+    const custName = row._id.customerName || "Walk-in Customer";
+    const prodName = row._id.medicineName || "Unknown Product";
+    const month = row._id.month;
+    const fyMonthIdx = getFYMonthIndex(month);
+    const qIdx = getQuarterIndex(month);
+
+    const custKey = custIdStr !== "walk-in" ? custIdStr : `walk-in_${custName}`;
+
+    if (!customerMap.has(custKey)) {
+      customerMap.set(custKey, {
+        customerId: row._id.customerId || null,
+        customerName: custName,
+        contact: row.contact || "",
+        address: row.address || "",
+        gstin: row.gstin || "",
+        totalRevenue: 0,
+        totalQuantity: 0,
+        monthlyTotals: Array(12)
+          .fill(0)
+          .map((_, i) => ({ monthName: MONTH_LABELS[i], quantity: 0, revenue: 0 })),
+        quarterlyTotals: Array(4)
+          .fill(0)
+          .map((_, i) => ({ label: `Q${i + 1}`, quantity: 0, revenue: 0 })),
+        productsMap: new Map(),
+      });
+    }
+
+    const custObj = customerMap.get(custKey);
+    const revVal = Math.round(row.totalRevenue * 100) / 100;
+    const qtyVal = row.totalQuantity || 0;
+
+    if (!custObj.productsMap.has(prodName)) {
+      custObj.productsMap.set(prodName, {
+        medicineName: prodName,
+        totalRevenue: 0,
+        totalQuantity: 0,
+        monthlyData: Array(12)
+          .fill(0)
+          .map((_, i) => ({ monthName: MONTH_LABELS[i], quantity: 0, revenue: 0 })),
+        quarterlyData: Array(4)
+          .fill(0)
+          .map((_, i) => ({ label: `Q${i + 1}`, quantity: 0, revenue: 0 })),
+      });
+    }
+
+    const prodObj = custObj.productsMap.get(prodName);
+
+    prodObj.monthlyData[fyMonthIdx].quantity += qtyVal;
+    prodObj.monthlyData[fyMonthIdx].revenue = Math.round((prodObj.monthlyData[fyMonthIdx].revenue + revVal) * 100) / 100;
+
+    prodObj.quarterlyData[qIdx].quantity += qtyVal;
+    prodObj.quarterlyData[qIdx].revenue = Math.round((prodObj.quarterlyData[qIdx].revenue + revVal) * 100) / 100;
+
+    prodObj.totalQuantity += qtyVal;
+    prodObj.totalRevenue += revVal;
+
+    custObj.monthlyTotals[fyMonthIdx].quantity += qtyVal;
+    custObj.monthlyTotals[fyMonthIdx].revenue = Math.round((custObj.monthlyTotals[fyMonthIdx].revenue + revVal) * 100) / 100;
+
+    custObj.quarterlyTotals[qIdx].quantity += qtyVal;
+    custObj.quarterlyTotals[qIdx].revenue = Math.round((custObj.quarterlyTotals[qIdx].revenue + revVal) * 100) / 100;
+
+    custObj.totalQuantity += qtyVal;
+    custObj.totalRevenue += revVal;
+
+    grandTotalQuantity += qtyVal;
+    grandTotalRevenue += revVal;
+
+    monthlyGrandTotals[fyMonthIdx].quantity += qtyVal;
+    monthlyGrandTotals[fyMonthIdx].revenue = Math.round((monthlyGrandTotals[fyMonthIdx].revenue + revVal) * 100) / 100;
+
+    quarterlyGrandTotals[qIdx].quantity += qtyVal;
+    quarterlyGrandTotals[qIdx].revenue = Math.round((quarterlyGrandTotals[qIdx].revenue + revVal) * 100) / 100;
+
+    if (prodObj.totalRevenue > topPair.revenue) {
+      topPair = {
+        name: `${custName} – ${prodName}`,
+        revenue: prodObj.totalRevenue,
+      };
+    }
+  });
+
+  let customersList = Array.from(customerMap.values()).map((custObj) => {
+    const productsList = Array.from(custObj.productsMap.values()).map((p) => ({
+      ...p,
+      totalRevenue: Math.round(p.totalRevenue * 100) / 100,
+    }));
+    productsList.sort((a, b) => b.totalRevenue - a.totalRevenue);
+
+    const { productsMap, ...cleanCust } = custObj;
+    return {
+      ...cleanCust,
+      totalRevenue: Math.round(cleanCust.totalRevenue * 100) / 100,
+      products: productsList,
+    };
+  });
+
+  if (search && search.trim()) {
+    const q = search.trim().toLowerCase();
+    customersList = customersList
+      .map((c) => {
+        const matchesCust =
+          c.customerName.toLowerCase().includes(q) ||
+          (c.contact && c.contact.toLowerCase().includes(q)) ||
+          (c.gstin && c.gstin.toLowerCase().includes(q)) ||
+          (c.address && c.address.toLowerCase().includes(q));
+
+        if (matchesCust) return c;
+
+        const matchingProds = c.products.filter((p) =>
+          p.medicineName.toLowerCase().includes(q)
+        );
+
+        if (matchingProds.length > 0) {
+          return {
+            ...c,
+            products: matchingProds,
+          };
+        }
+
+        return null;
+      })
+      .filter(Boolean);
+  }
+
+  customersList.sort((a, b) => b.totalRevenue - a.totalRevenue);
+
+  let totalProductsCount = 0;
+  customersList.forEach((c) => {
+    totalProductsCount += c.products.length;
+  });
+
+  const selectedFYLabel = `FY ${selectedFY}-${String(selectedFY + 1).slice(-2)}`;
+
+  return {
+    financialYear: selectedFY,
+    financialYearLabel: selectedFYLabel,
+    availableFinancialYears,
+    availableYears: availableFYs,
+    summary: {
+      grandTotalRevenue: Math.round(grandTotalRevenue * 100) / 100,
+      grandTotalQuantity,
+      activeCustomersCount: customersList.length,
+      activeRelationshipsCount: totalProductsCount,
+      topCustomerProduct: topPair.name,
+      topCustomerProductAmount: Math.round(topPair.revenue * 100) / 100,
+    },
+    monthlyGrandTotals,
+    quarterlyGrandTotals,
+    customers: customersList,
+  };
+};
+
 module.exports = {
   getInventoryStatsData,
   getCustomerStatsData,
   getInvoiceStatsData,
   getDashboardStatsData,
   getProductWiseMonthlySalesData,
+  getCustomerWiseSalesData,
+  getCustomerProductMonthlySalesData,
 };
