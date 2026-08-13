@@ -108,6 +108,10 @@ const getAllPurchases = async (req, res) => {
       supplier,
     } = req.query;
 
+    // M-3 FIX: Validate sortBy against allowlist
+    const ALLOWED_SORT_FIELDS = ["createdAt", "purchaseDate", "total", "purchaseNumber"];
+    const safeSortBy = ALLOWED_SORT_FIELDS.includes(sortBy) ? sortBy : "createdAt";
+
     const filter = {};
     if (purchaseNumber) {
       filter.purchaseNumber = { $regex: purchaseNumber, $options: "i" };
@@ -121,7 +125,7 @@ const getAllPurchases = async (req, res) => {
 
     const purchases = await Purchase.find(filter)
       .populate("items.medicine", "name batchNumber packagingType")
-      .sort({ [sortBy]: sortOrder })
+      .sort({ [safeSortBy]: sortOrder })
       .limit(parseInt(limit))
       .skip(skip);
 

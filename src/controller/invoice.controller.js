@@ -57,6 +57,10 @@ const getAllInvoices = async (req, res) => {
       invoiceType,
     } = req.query;
 
+    // M-3 FIX: Validate sortBy against allowlist
+    const ALLOWED_SORT_FIELDS = ["createdAt", "invoiceDate", "total", "invoiceNumber", "status"];
+    const safeSortBy = ALLOWED_SORT_FIELDS.includes(sortBy) ? sortBy : "createdAt";
+
     const filter = {};
 
     if (status) filter.status = status;
@@ -78,7 +82,7 @@ const getAllInvoices = async (req, res) => {
 
     const invoices = await Invoice.find(filter)
       .populate("customer", "name address contact gstin dlNo")
-      .sort({ [sortBy]: sortOrder })
+      .sort({ [safeSortBy]: sortOrder })
       .limit(parseInt(limit))
       .skip(skip);
 

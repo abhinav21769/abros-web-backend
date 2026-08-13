@@ -43,12 +43,18 @@ const setupWebhook = async (req, res) => {
     });
   }
 
+  // H-1 FIX: Require secret from env; no hardcoded fallback
   const webhookUrl =
     process.env.TELEGRAM_WEBHOOK_URL ||
     "https://abros-healthcare.onrender.com/api/telegram/webhook";
-  const secret =
-    process.env.TELEGRAM_WEBHOOK_SECRET ||
-    "6ad4d46827d7a49b8ab1dcd60de5fe24118198ac5061de28f5540ed2551329ef";
+  const secret = process.env.TELEGRAM_WEBHOOK_SECRET;
+  if (!secret) {
+    return sendError(res, {
+      message: "TELEGRAM_WEBHOOK_SECRET environment variable is not configured.",
+      code: ERROR_CODES.VALIDATION_ERROR,
+      statusCode: 400,
+    });
+  }
 
   try {
     const url = `https://api.telegram.org/bot${token}/setWebhook?url=${encodeURIComponent(webhookUrl)}&secret_token=${encodeURIComponent(secret)}`;

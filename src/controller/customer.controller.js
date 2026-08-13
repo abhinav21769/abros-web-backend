@@ -51,6 +51,10 @@ const getAllCustomers = async (req, res) => {
       gstin,
     } = req.query;
 
+    // M-3 FIX: Validate sortBy against allowlist
+    const ALLOWED_SORT_FIELDS = ["createdAt", "name", "contact"];
+    const safeSortBy = ALLOWED_SORT_FIELDS.includes(sortBy) ? sortBy : "createdAt";
+
     const filter = {};
 
     if (name) {
@@ -73,7 +77,7 @@ const getAllCustomers = async (req, res) => {
     const sortOrder = order === "asc" ? 1 : -1;
 
     const customers = await Customer.find(filter)
-      .sort({ [sortBy]: sortOrder })
+      .sort({ [safeSortBy]: sortOrder })
       .limit(parseInt(limit))
       .skip(skip);
 

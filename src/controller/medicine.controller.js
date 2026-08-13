@@ -58,6 +58,10 @@ const getAllMedicines = async (req, res) => {
       batchNumber,
     } = req.query;
 
+    // M-3 FIX: Validate sortBy against allowlist
+    const ALLOWED_SORT_FIELDS = ["createdAt", "name", "quantity", "expiryDate", "mrp", "rate"];
+    const safeSortBy = ALLOWED_SORT_FIELDS.includes(sortBy) ? sortBy : "createdAt";
+
     const filter = {};
 
     if (name) {
@@ -91,7 +95,7 @@ const getAllMedicines = async (req, res) => {
     const sortOrder = order === "asc" ? 1 : -1;
 
     const medicines = await Medicine.find(filter)
-      .sort({ [sortBy]: sortOrder })
+      .sort({ [safeSortBy]: sortOrder })
       .limit(parseInt(limit))
       .skip(skip);
 
@@ -151,8 +155,18 @@ const updateMedicine = async (req, res) => {
         return null;
       }
 
+      // H-3 FIX: Explicit allowlist instead of Object.assign(existing, req.body)
+      const ALLOWED_FIELDS = [
+        "name", "packagingType", "manufacturer", "hsn", "gstRate",
+        "description", "batches", "expiryDate", "mrp", "quantity",
+        "batchNumber", "rate", "ptr",
+      ];
       const oldQuantity = existing.quantity;
-      Object.assign(existing, req.body);
+      for (const field of ALLOWED_FIELDS) {
+        if (Object.prototype.hasOwnProperty.call(req.body, field)) {
+          existing[field] = req.body[field];
+        }
+      }
       await existing.save({ session });
 
       if (Number(existing.quantity) !== Number(oldQuantity)) {

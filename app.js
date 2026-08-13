@@ -26,7 +26,26 @@ const requestLogger = require("./src/middleware/requestLogger");
 const app = express();
 const isProduction = process.env.NODE_ENV === "production";
 
-app.use(cors());
+// C-2 FIX: Restrict CORS to known allowed origins instead of wildcard
+const ALLOWED_ORIGINS = (
+  process.env.CORS_ALLOWED_ORIGINS ||
+  "http://localhost:5173,http://localhost:4173,https://abros-healthcare.web.app"
+)
+  .split(",")
+  .map((o) => o.trim())
+  .filter(Boolean);
+
+app.use(
+  cors({
+    origin: (origin, callback) => {
+      // Allow requests with no origin (mobile apps, Postman, server-to-server)
+      if (!origin) return callback(null, true);
+      if (ALLOWED_ORIGINS.includes(origin)) return callback(null, true);
+      return callback(new Error(`CORS: Origin '${origin}' not allowed`));
+    },
+    credentials: true,
+  }),
+);
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(requestLogger);
@@ -95,12 +114,14 @@ app.use((req, res) => {
 const PORT = process.env.PORT || 3000;
 
 const validateEnvironment = () => {
-  const required = ["MONGO_URI", "JWT_SECRET"];
-  const missing = required.filter((key) => !process.env[key]);
+  // M-1 FIX: Exit process on missing critical env vars instead of just warning
+  const critical = ["MONGO_URI", "JWT_SECRET"];
+  const missing = critical.filter((key) => !process.env[key]);
   if (missing.length > 0) {
-    console.warn(
-      `[CONFIG WARN] Missing recommended environment variables: ${missing.join(", ")}`,
+    console.error(
+      `[CONFIG ERROR] Missing critical environment variables: ${missing.join(", ")}. Server cannot start.`,
     );
+    process.exit(1);
   }
 };
 
