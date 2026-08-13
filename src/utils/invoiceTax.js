@@ -18,6 +18,15 @@ const calculateItemAmount = (quantity, rate, discount = 0) => {
   return Math.round((gross - discountAmount) * 100) / 100;
 };
 
+const calculateItemNetRate = (quantity, free = 0, rate = 0, discount = 0) => {
+  const qty = Number(quantity) || 0;
+  const freeQty = Number(free) || 0;
+  const totalUnits = qty + freeQty;
+  if (totalUnits <= 0) return 0;
+  const taxable = calculateItemAmount(qty, rate, discount);
+  return Math.round((taxable / totalUnits) * 100) / 100;
+};
+
 const buildInvoiceTotals = (items) => {
   const normalizedItems = items.map((item) => {
     const quantity = Number(item.quantity);
@@ -88,6 +97,8 @@ module.exports = {
   DEFAULT_GST_RATE,
   normalizeGstRate,
   normalizeDiscount,
+  calculateItemAmount,
+  calculateItemNetRate,
   buildInvoiceTotals,
   calculateInvoiceTaxBreakdown,
 };
