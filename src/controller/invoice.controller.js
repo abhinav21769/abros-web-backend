@@ -20,6 +20,70 @@ const {
   withTransaction,
 } = require("../services/inventory.service");
 
+// H-1 FIX: an issued invoice is a tax record. Only the fields the billing form
+// actually edits may be changed; money (subtotal/total), payment timestamps and
+// identity (invoiceNumber/invoiceType) are derived here or frozen, never taken
+// from the request body.
+const SALE_UPDATABLE_FIELDS = [
+  "customer",
+  "invoiceDate",
+  "status",
+  "paymentType",
+  "notes",
+];
+
+const PURCHASE_UPDATABLE_FIELDS = [
+  "supplier",
+  "supplierAddress",
+  "supplierContact",
+  "supplierDlNo",
+  "supplierGstin",
+  "invoiceDate",
+  "status",
+  "paymentType",
+  "notes",
+];
+
+class ImmutableFieldError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "ImmutableFieldError";
+  }
+}
+
+const pickUpdatableFields = (body, invoiceType) => {
+  const allowed =
+    invoiceType === "purchase"
+      ? PURCHASE_UPDATABLE_FIELDS
+      : SALE_UPDATABLE_FIELDS;
+
+  const updateData = {};
+  for (const field of allowed) {
+    if (Object.prototype.hasOwnProperty.call(body, field)) {
+      updateData[field] = body[field];
+    }
+  }
+
+  return updateData;
+};
+
+// The billing form echoes the current number back on every edit, so only a
+// genuine change is rejected - and it is rejected loudly rather than ignored,
+// so the user is never told an edit was saved when it was not.
+const assertInvoiceNumberUnchanged = (body, existing) => {
+  if (
+    !Object.prototype.hasOwnProperty.call(body, "invoiceNumber") ||
+    body.invoiceNumber == null
+  ) {
+    return;
+  }
+
+  const requested = String(body.invoiceNumber).trim().toUpperCase();
+  if (requested && requested !== existing.invoiceNumber) {
+    throw new ImmutableFieldError(ERRORS.immutable.invoiceNumber);
+  }
+};
+
 const createInvoice = async (req, res) => {
   try {
     const invoice = await createInvoiceRecord(req.body);
@@ -137,28 +201,33 @@ const getInvoiceById = async (req, res) => {
 
 const updateInvoice = async (req, res) => {
   try {
-    const updateData = { ...req.body };
-    let normalizedItems;
-
-    if (updateData.items) {
-      const totals = buildInvoiceTotals(updateData.items);
-      normalizedItems = totals.items;
-      updateData.items = totals.items;
-      updateData.subtotal = totals.subtotal;
-      updateData.total = totals.total;
-    }
-
-    if (updateData.invoiceDate) {
-      updateData.invoiceDate = normalizeInvoiceDate(updateData.invoiceDate);
-    }
-
-    delete updateData.invoiceType;
+    const body = req.body || {};
+    const totals = body.items ? buildInvoiceTotals(body.items) : null;
 
     const invoice = await withTransaction(async (session) => {
       const existing = await Invoice.findById(req.params.id).session(session);
 
       if (!existing) {
         return null;
+      }
+
+      assertInvoiceNumberUnchanged(body, existing);
+
+      const updateData = pickUpdatableFields(
+        body,
+        existing.invoiceType || "sale",
+      );
+
+      if (updateData.invoiceDate) {
+        updateData.invoiceDate = normalizeInvoiceDate(updateData.invoiceDate);
+      }
+
+      // Totals always come from the items we just normalized. When the request
+      // carries no items, the stored totals are left exactly as they are.
+      if (totals) {
+        updateData.items = totals.items;
+        updateData.subtotal = totals.subtotal;
+        updateData.total = totals.total;
       }
 
       const oldStatus = existing.status;
@@ -178,7 +247,7 @@ const updateInvoice = async (req, res) => {
         updateData.paidAt = null;
       }
       const oldItems = existing.items;
-      const newItems = normalizedItems ?? oldItems;
+      const newItems = totals ? totals.items : oldItems;
 
       await syncInvoiceStockChanges(
         oldItems,
@@ -218,15 +287,17 @@ const updateInvoice = async (req, res) => {
       data: invoice,
     });
   } catch (error) {
+    const isImmutableField = error instanceof ImmutableFieldError;
+
     return sendError(res, {
-      message: ERRORS.saveFailed.invoice,
+      message: isImmutableField ? error.message : ERRORS.saveFailed.invoice,
       code:
-        error instanceof InsufficientStockError
-          ? ERROR_CODES.VALIDATION_ERROR
-          : error.code === 11000
-            ? ERROR_CODES.DUPLICATE_KEY
-            : ERROR_CODES.VALIDATION_ERROR,
-      errorMessage: getUserMessage(error, ERRORS.saveFailed.invoice),
+        error.code === 11000
+          ? ERROR_CODES.DUPLICATE_KEY
+          : ERROR_CODES.VALIDATION_ERROR,
+      errorMessage: isImmutableField
+        ? error.message
+        : getUserMessage(error, ERRORS.saveFailed.invoice),
       statusCode: 400,
     });
   }

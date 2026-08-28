@@ -1,5 +1,17 @@
 const mongoose = require("mongoose");
 
+// H-3 FIX: what the stock looked like when this line was billed. A cancellation
+// restores from this snapshot instead of guessing batch cost from the sale price.
+const batchSnapshotSchema = new mongoose.Schema(
+  {
+    rate: { type: Number, min: 0 },
+    ptr: { type: Number, min: 0 },
+    mrp: { type: Number, min: 0 },
+    expiryDate: { type: Date },
+  },
+  { _id: false },
+);
+
 const invoiceItemSchema = new mongoose.Schema(
   {
     medicine: {
@@ -58,6 +70,10 @@ const invoiceItemSchema = new mongoose.Schema(
       type: Number,
       required: true,
       min: [0, "Amount cannot be negative"],
+    },
+    sourceBatch: {
+      type: batchSnapshotSchema,
+      default: undefined,
     },
   },
   { _id: false },

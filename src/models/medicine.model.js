@@ -99,6 +99,10 @@ const medicineSchema = new mongoose.Schema(
   },
   {
     timestamps: true,
+    // H-2 FIX: stock is adjusted by loading a medicine, mutating a batch and
+    // saving it back. Versioning every save makes a concurrent write fail with
+    // a VersionError instead of silently overwriting the other one's deduction.
+    optimisticConcurrency: true,
     toJSON: { virtuals: true },
     toObject: { virtuals: true },
   },

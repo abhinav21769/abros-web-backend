@@ -122,8 +122,6 @@ const createInvoiceRecord = async (payload) => {
       total,
     });
 
-    await created.save({ session });
-
     if (isInvoiceStockActive(status, type)) {
       const ledgerMeta = {
         referenceType: "invoice",
@@ -143,6 +141,17 @@ const createInvoiceRecord = async (payload) => {
         });
       }
     }
+
+    // H-3 FIX: stock movement runs before the invoice is written, and the items
+    // are re-assigned afterwards. Deduction fills in which batch each line came
+    // from (batch number, expiry, MRP and the cost snapshot); assigning the
+    // plain objects at construction time copied them before any of that existed,
+    // so an auto-allocated line was stored with no batch details at all.
+    // Writing after the deduction also means a rejected sale leaves no invoice
+    // behind on deployments where the transaction is unavailable.
+    created.set("items", normalizedItems);
+
+    await created.save({ session });
 
     return created;
   });

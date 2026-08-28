@@ -67,6 +67,10 @@ const ERRORS = {
     customer: "Could not remove customer. Please try again.",
     invoice: "Could not delete invoice. Please try again.",
   },
+  immutable: {
+    invoiceNumber:
+      "Invoice number cannot be changed after the invoice is issued.",
+  },
   duplicate: {
     gstin: "A customer with this GSTIN already exists.",
     dlNo: "A customer with this Drug License number already exists.",
