@@ -164,9 +164,29 @@ const invoiceSchema = new mongoose.Schema(
       type: String,
       trim: true,
     },
+    // M-10 FIX: a filed tax invoice is not erased. Deleting sets this instead,
+    // which hides it everywhere in the app while keeping the record - and keeps
+    // its number permanently allocated so the series can never repeat.
+    deletedAt: {
+      type: Date,
+      default: null,
+      index: true,
+    },
   },
   {
     timestamps: true,
+  },
+);
+
+// Every read excludes deleted invoices unless it explicitly opts in with
+// .setOptions({ withDeleted: true }) - only invoice numbering does.
+invoiceSchema.pre(
+  ["find", "findOne", "findOneAndUpdate", "countDocuments", "distinct"],
+  function excludeDeleted(next) {
+    if (!this.getOptions().withDeleted && this.getFilter().deletedAt === undefined) {
+      this.where({ deletedAt: null });
+    }
+    next();
   },
 );
 

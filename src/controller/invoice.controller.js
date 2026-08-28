@@ -335,7 +335,11 @@ const deleteInvoice = async (req, res) => {
         }
       }
 
-      await Invoice.findByIdAndDelete(req.params.id, { session });
+      // M-10 FIX: the record and its number stay; it just stops being visible.
+      existing.deletedAt = new Date();
+      existing.status = "cancelled";
+      await existing.save({ session });
+
       return existing;
     });
 

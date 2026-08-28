@@ -64,15 +64,22 @@ const getAllMedicines = async (req, res) => {
 
     const filter = {};
 
+    // M-5 FIX: batch search and the expiry filter both used to write filter.$or,
+    // so asking for both silently dropped the batch search and returned
+    // unrelated medicines. Each condition is its own clause under $and now.
+    const conditions = [];
+
     if (name) {
       filter.name = { $regex: name, $options: "i" };
     }
 
     if (batchNumber) {
-      filter.$or = [
-        { batchNumber: { $regex: batchNumber, $options: "i" } },
-        { "batches.batchNumber": { $regex: batchNumber, $options: "i" } },
-      ];
+      conditions.push({
+        $or: [
+          { batchNumber: { $regex: batchNumber, $options: "i" } },
+          { "batches.batchNumber": { $regex: batchNumber, $options: "i" } },
+        ],
+      });
     }
 
     if (packagingType) {
@@ -80,15 +87,23 @@ const getAllMedicines = async (req, res) => {
     }
 
     if (expired === "true") {
-      filter.$or = [
-        { expiryDate: { $lt: new Date() } },
-        { "batches.expiryDate": { $lt: new Date() } },
-      ];
+      conditions.push({
+        $or: [
+          { expiryDate: { $lt: new Date() } },
+          { "batches.expiryDate": { $lt: new Date() } },
+        ],
+      });
     } else if (expired === "false") {
-      filter.$or = [
-        { expiryDate: { $gte: new Date() } },
-        { "batches.expiryDate": { $gte: new Date() } },
-      ];
+      conditions.push({
+        $or: [
+          { expiryDate: { $gte: new Date() } },
+          { "batches.expiryDate": { $gte: new Date() } },
+        ],
+      });
+    }
+
+    if (conditions.length > 0) {
+      filter.$and = conditions;
     }
 
     const skip = (page - 1) * limit;

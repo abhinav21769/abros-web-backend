@@ -122,3 +122,39 @@ describe("Auth API Endpoints", () => {
     });
   });
 });
+
+describe("M-1: login rate limiting", () => {
+  test("signing in successfully does not spend the attempt allowance", async () => {
+    const { user } = await createTestUser({ password: "password123" });
+
+    const statuses = [];
+    for (let i = 0; i < 12; i++) {
+      const res = await request(app)
+        .post("/api/auth/login")
+        .set("X-Forwarded-For", "198.51.100.7")
+        .send({ username: user.username, password: "password123" });
+      statuses.push(res.status);
+    }
+
+    expect(statuses.every((status) => status === 200)).toBe(true);
+  });
+
+  test("failed attempts are counted per client, not shared between them", async () => {
+    const { user } = await createTestUser({ password: "password123" });
+
+    const wrongPassword = (ip) =>
+      request(app)
+        .post("/api/auth/login")
+        .set("X-Forwarded-For", ip)
+        .send({ username: user.username, password: "wrong-password" });
+
+    // One client burns its whole allowance.
+    for (let i = 0; i < 10; i++) {
+      expect((await wrongPassword("198.51.100.8")).status).toBe(401);
+    }
+    expect((await wrongPassword("198.51.100.8")).status).toBe(429);
+
+    // A different client is unaffected by it.
+    expect((await wrongPassword("198.51.100.9")).status).toBe(401);
+  });
+});

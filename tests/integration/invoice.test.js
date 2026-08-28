@@ -482,6 +482,82 @@ describe("Invoice API Endpoints", () => {
     });
   });
 
+  describe("M-10: deleting an invoice keeps the record and its number", () => {
+    const createInvoice = () =>
+      request(app)
+        .post("/api/invoices")
+        .set("Authorization", `Bearer ${authToken}`)
+        .send({
+          customer: customer._id,
+          items: [
+            {
+              medicine: medicine._id,
+              medicineName: medicine.name,
+              batchNumber: "BAT-INV-01",
+              quantity: 5,
+              rate: 80,
+            },
+          ],
+        });
+
+    test("the invoice is retained, marked deleted, and hidden everywhere", async () => {
+      const created = await createInvoice();
+      const invoiceId = created.body.data._id;
+
+      const res = await request(app)
+        .delete(`/api/invoices/${invoiceId}`)
+        .set("Authorization", `Bearer ${authToken}`);
+      expect(res.status).toBe(200);
+
+      // The document survives...
+      const retained = await Invoice.findById(invoiceId)
+        .setOptions({ withDeleted: true })
+        .lean();
+      expect(retained).not.toBeNull();
+      expect(retained.deletedAt).toBeInstanceOf(Date);
+      expect(retained.status).toBe("cancelled");
+
+      // ...but nothing in the app can see it.
+      expect(await Invoice.findById(invoiceId)).toBeNull();
+
+      const list = await request(app)
+        .get("/api/invoices")
+        .set("Authorization", `Bearer ${authToken}`);
+      expect(list.body.data.items.map((i) => i._id)).not.toContain(invoiceId);
+
+      const fetched = await request(app)
+        .get(`/api/invoices/${invoiceId}`)
+        .set("Authorization", `Bearer ${authToken}`);
+      expect(fetched.status).toBe(404);
+    });
+
+    test("the deleted invoice number is never handed out again", async () => {
+      const created = await createInvoice();
+      const usedNumber = created.body.data.invoiceNumber;
+
+      await request(app)
+        .delete(`/api/invoices/${created.body.data._id}`)
+        .set("Authorization", `Bearer ${authToken}`);
+
+      const next = await request(app)
+        .get("/api/invoices/generate-number")
+        .set("Authorization", `Bearer ${authToken}`);
+
+      expect(next.body.data.invoiceNumber).not.toBe(usedNumber);
+    });
+
+    test("deleting still returns the stock to inventory", async () => {
+      const created = await createInvoice();
+      expect((await Medicine.findById(medicine._id)).quantity).toBe(45);
+
+      await request(app)
+        .delete(`/api/invoices/${created.body.data._id}`)
+        .set("Authorization", `Bearer ${authToken}`);
+
+      expect((await Medicine.findById(medicine._id)).quantity).toBe(50);
+    });
+  });
+
   describe("DELETE /api/invoices/:id", () => {
     test("deleting invoice restores stock", async () => {
       const createRes = await request(app)

@@ -141,3 +141,31 @@ describe("Medicine API Endpoints", () => {
     });
   });
 });
+
+describe("M-5: batch search combined with the expiry filter", () => {
+  test("filtering out expired stock does not discard the batch search", async () => {
+    const { token } = await createTestUser();
+
+    await createTestMedicine({
+      name: "FilterTarget",
+      batches: [
+        {
+          batchNumber: "ZZZ-UNIQUE",
+          expiryDate: new Date(Date.now() + 200 * 86400000),
+          mrp: 50,
+          rate: 30,
+          ptr: 25,
+          quantity: 10,
+        },
+      ],
+    });
+    await createTestMedicine({ name: "UnrelatedMedicine" });
+
+    const res = await request(app)
+      .get("/api/medicines?batchNumber=ZZZ-UNIQUE&expired=false")
+      .set("Authorization", `Bearer ${token}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.data.items.map((m) => m.name)).toEqual(["FilterTarget"]);
+  });
+});

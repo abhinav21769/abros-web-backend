@@ -26,6 +26,12 @@ const requestLogger = require("./src/middleware/requestLogger");
 const app = express();
 const isProduction = process.env.NODE_ENV === "production";
 
+// M-1 FIX: Render terminates TLS at its own proxy, so without this every request
+// arrives from the same socket address and the login limiter buckets all callers
+// together - ten requests from anywhere lock the real user out. Trusting exactly
+// one hop takes the client IP Render appends, which a client cannot spoof.
+app.set("trust proxy", 1);
+
 // C-2 FIX: Restrict CORS to known allowed origins instead of wildcard
 const ALLOWED_ORIGINS = (
   process.env.CORS_ALLOWED_ORIGINS ||

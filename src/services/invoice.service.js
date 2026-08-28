@@ -63,7 +63,9 @@ const generateInvoiceNumberValue = async (invoiceType = "sale") => {
     })),
   };
 
+  // Deleted invoices still hold their number, so the series never reuses one.
   const existingInvoices = await Invoice.find(query)
+    .setOptions({ withDeleted: true })
     .select("invoiceNumber")
     .lean();
 
@@ -80,11 +82,14 @@ const generateInvoiceNumberValue = async (invoiceType = "sale") => {
   let nextNum = maxNum + 1;
   let candidate = `${prefix}${String(nextNum).padStart(3, "0")}`;
 
-  let exists = await Invoice.exists({ invoiceNumber: candidate });
+  const numberTaken = (value) =>
+    Invoice.exists({ invoiceNumber: value }).setOptions({ withDeleted: true });
+
+  let exists = await numberTaken(candidate);
   while (exists) {
     nextNum += 1;
     candidate = `${prefix}${String(nextNum).padStart(3, "0")}`;
-    exists = await Invoice.exists({ invoiceNumber: candidate });
+    exists = await numberTaken(candidate);
   }
 
   return candidate;
