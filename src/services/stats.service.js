@@ -219,6 +219,21 @@ const getInvoiceStatsData = async () => {
   };
 };
 
+const QUARTER_LABELS = [
+  "Q1 (Apr – Jun)",
+  "Q2 (Jul – Sep)",
+  "Q3 (Oct – Dec)",
+  "Q4 (Jan – Mar)",
+];
+
+const MONTH_LABELS = [
+  "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec", "Jan", "Feb", "Mar"
+];
+
+function getFYMonthIndex(month) {
+  return month >= 4 ? month - 4 : month + 8;
+}
+
 function getCurrentFinancialYear() {
   return getFinancialYearStart();
 }
@@ -337,19 +352,16 @@ const getProductWiseMonthlySalesData = async ({ year, financialYear, search } = 
   let grandTotalFree = 0;
   const quarterlyGrandTotals = Array(4)
     .fill(0)
-    .map(() => ({ quantity: 0, free: 0, revenue: 0 }));
-
-  const QUARTER_LABELS = [
-    "Q1 (Apr – Jun)",
-    "Q2 (Jul – Sep)",
-    "Q3 (Oct – Dec)",
-    "Q4 (Jan – Mar)",
-  ];
+    .map((_, i) => ({ label: QUARTER_LABELS[i], quantity: 0, free: 0, revenue: 0 }));
+  const monthlyGrandTotals = Array(12)
+    .fill(0)
+    .map((_, i) => ({ monthName: MONTH_LABELS[i], monthNumber: i < 9 ? i + 4 : i - 8, quantity: 0, free: 0, revenue: 0 }));
 
   aggregateResults.forEach((row) => {
     const productName = row._id.medicineName || "Unknown Product";
     const month = row._id.month;
     const qIdx = getQuarterIndex(month);
+    const mIdx = getFYMonthIndex(month);
 
     if (!productMap.has(productName)) {
       productMap.set(productName, {
@@ -360,7 +372,10 @@ const getProductWiseMonthlySalesData = async ({ year, financialYear, search } = 
         totalRevenue: 0,
         quarterlyData: Array(4)
           .fill(0)
-          .map(() => ({ quantity: 0, free: 0, revenue: 0, orderCount: 0 })),
+          .map((_, i) => ({ label: QUARTER_LABELS[i], quantity: 0, free: 0, revenue: 0, orderCount: 0 })),
+        monthlyData: Array(12)
+          .fill(0)
+          .map((_, i) => ({ monthName: MONTH_LABELS[i], monthNumber: i < 9 ? i + 4 : i - 8, quantity: 0, free: 0, revenue: 0, orderCount: 0 })),
       });
     }
 
@@ -379,6 +394,11 @@ const getProductWiseMonthlySalesData = async ({ year, financialYear, search } = 
     prod.quarterlyData[qIdx].revenue = Math.round((prod.quarterlyData[qIdx].revenue + revenueVal) * 100) / 100;
     prod.quarterlyData[qIdx].orderCount += row.invoiceIds.length;
 
+    prod.monthlyData[mIdx].quantity += row.totalQuantity;
+    prod.monthlyData[mIdx].free += row.totalFree || 0;
+    prod.monthlyData[mIdx].revenue = Math.round((prod.monthlyData[mIdx].revenue + revenueVal) * 100) / 100;
+    prod.monthlyData[mIdx].orderCount += row.invoiceIds.length;
+
     prod.totalQuantity += row.totalQuantity;
     prod.totalFree += row.totalFree || 0;
     prod.totalRevenue += row.totalRevenue;
@@ -390,6 +410,10 @@ const getProductWiseMonthlySalesData = async ({ year, financialYear, search } = 
     quarterlyGrandTotals[qIdx].quantity += row.totalQuantity;
     quarterlyGrandTotals[qIdx].free += row.totalFree || 0;
     quarterlyGrandTotals[qIdx].revenue = Math.round((quarterlyGrandTotals[qIdx].revenue + revenueVal) * 100) / 100;
+
+    monthlyGrandTotals[mIdx].quantity += row.totalQuantity;
+    monthlyGrandTotals[mIdx].free += row.totalFree || 0;
+    monthlyGrandTotals[mIdx].revenue = Math.round((monthlyGrandTotals[mIdx].revenue + revenueVal) * 100) / 100;
   });
 
   const productsList = Array.from(productMap.values()).map((prod) => ({
@@ -432,7 +456,7 @@ const getProductWiseMonthlySalesData = async ({ year, financialYear, search } = 
       totalProductsCount: productsList.length,
     },
     quarterlyGrandTotals,
-    monthlyGrandTotals: quarterlyGrandTotals,
+    monthlyGrandTotals,
     products: productsList,
   };
 };
@@ -669,14 +693,6 @@ const getCustomerWiseSalesData = async ({ year, financialYear, search } = {}) =>
     customers: customersList,
   };
 };
-
-function getFYMonthIndex(month) {
-  return month >= 4 ? month - 4 : month + 8;
-}
-
-const MONTH_LABELS = [
-  "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec", "Jan", "Feb", "Mar"
-];
 
 const getCustomerProductMonthlySalesData = async ({ year, financialYear, customerId, search } = {}) => {
   const currentFY = getCurrentFinancialYear();

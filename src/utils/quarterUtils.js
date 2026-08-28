@@ -82,9 +82,74 @@ const getQuarterDateRange = (financialYear, quarter) => {
   };
 };
 
+const MONTH_NAMES = {
+  4: "April",
+  5: "May",
+  6: "June",
+  7: "July",
+  8: "August",
+  9: "September",
+  10: "October",
+  11: "November",
+  12: "December",
+  1: "January",
+  2: "February",
+  3: "March",
+};
+
+const getMonthDateRange = (financialYear, month) => {
+  const fy = Number(financialYear);
+  const m = Number(month);
+
+  if (!Number.isInteger(fy) || fy < 2000) {
+    throw new Error("Invalid financial year");
+  }
+  if (!Number.isInteger(m) || m < 1 || m > 12) {
+    throw new Error("Invalid month");
+  }
+
+  const calYear = m >= 4 ? fy : fy + 1;
+  const from = toIstStartOfDay(calYear, m, 1);
+  const to = toIstEndOfDay(calYear, m, lastDayOfMonth(calYear, m));
+  const fyLabel = `FY ${fy}-${String(fy + 1).slice(-2)}`;
+  const monthName = MONTH_NAMES[m] || `Month ${m}`;
+
+  return {
+    from,
+    to,
+    financialYear: fy,
+    month: m,
+    label: `${monthName}, ${fyLabel}`,
+    fromDate: `${calYear}-${pad(m)}-01`,
+    toDate: `${calYear}-${pad(m)}-${pad(lastDayOfMonth(calYear, m))}`,
+  };
+};
+
+const getFullYearDateRange = (financialYear) => {
+  const fy = Number(financialYear);
+  if (!Number.isInteger(fy) || fy < 2000) {
+    throw new Error("Invalid financial year");
+  }
+  const from = toIstStartOfDay(fy, 4, 1);
+  const to = toIstEndOfDay(fy + 1, 3, 31);
+  const fyLabel = `FY ${fy}-${String(fy + 1).slice(-2)}`;
+
+  return {
+    from,
+    to,
+    financialYear: fy,
+    label: `Full Year, ${fyLabel}`,
+    fromDate: `${fy}-04-01`,
+    toDate: `${fy + 1}-03-31`,
+  };
+};
+
 module.exports = {
   QUARTER_LABELS,
+  MONTH_NAMES,
   getFinancialYearStart,
   getCurrentQuarter,
   getQuarterDateRange,
+  getMonthDateRange,
+  getFullYearDateRange,
 };

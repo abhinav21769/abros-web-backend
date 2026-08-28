@@ -2,9 +2,12 @@ const Invoice = require("../models/invoice.model");
 const { calculateInvoiceTaxBreakdown } = require("../utils/invoiceTax");
 const {
   getQuarterDateRange,
+  getMonthDateRange,
+  getFullYearDateRange,
   getFinancialYearStart,
   getCurrentQuarter,
   QUARTER_LABELS,
+  MONTH_NAMES,
 } = require("../utils/quarterUtils");
 
 const round2 = (value) => Math.round(Number(value) * 100) / 100;
@@ -36,8 +39,20 @@ const formatBucket = (bucket) => ({
   total: bucket.total.toFixed(2),
 });
 
-const getGstQuarterlySummary = async ({ financialYear, quarter }) => {
-  const period = getQuarterDateRange(financialYear, quarter);
+const getGstQuarterlySummary = async ({
+  financialYear,
+  quarter,
+  month,
+  periodType,
+}) => {
+  let period;
+  if (month != null && month !== "" && month !== "all") {
+    period = getMonthDateRange(financialYear, month);
+  } else if (quarter === "all" || month === "all" || periodType === "all") {
+    period = getFullYearDateRange(financialYear);
+  } else {
+    period = getQuarterDateRange(financialYear, quarter || getCurrentQuarter());
+  }
 
   const invoices = await Invoice.find({
     invoiceType: { $ne: "purchase" },
@@ -87,6 +102,7 @@ const getGstQuarterlySummary = async ({ financialYear, quarter }) => {
     period: {
       financialYear: period.financialYear,
       quarter: period.quarter,
+      month: period.month,
       label: period.label,
       fromDate: period.fromDate,
       toDate: period.toDate,
@@ -108,6 +124,7 @@ const getGstDefaults = () => {
     financialYear,
     quarter,
     quarterLabels: QUARTER_LABELS,
+    monthNames: MONTH_NAMES,
   };
 };
 

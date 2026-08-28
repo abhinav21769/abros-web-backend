@@ -8,9 +8,12 @@ const {
 } = require("../../src/utils/invoiceTax");
 const {
   QUARTER_LABELS,
+  MONTH_NAMES,
   getFinancialYearStart,
   getCurrentQuarter,
   getQuarterDateRange,
+  getMonthDateRange,
+  getFullYearDateRange,
 } = require("../../src/utils/quarterUtils");
 
 describe("Response Utilities", () => {
@@ -179,5 +182,21 @@ describe("Quarter Utilities", () => {
   test("getQuarterDateRange throws on invalid input", () => {
     expect(() => getQuarterDateRange(1990, 1)).toThrow("Invalid financial year");
     expect(() => getQuarterDateRange(2026, 5)).toThrow("Invalid quarter");
+  });
+
+  test("getMonthDateRange calculates valid date bounds for any month in FY", () => {
+    const april = getMonthDateRange(2026, 4);
+    expect(april.fromDate).toBe("2026-04-01");
+    expect(april.toDate).toBe("2026-04-30");
+
+    const feb = getMonthDateRange(2026, 2);
+    expect(feb.fromDate).toBe("2027-02-01");
+    expect(feb.toDate).toBe("2027-02-28");
+  });
+
+  test("getFullYearDateRange calculates valid full year bounds", () => {
+    const fy = getFullYearDateRange(2026);
+    expect(fy.fromDate).toBe("2026-04-01");
+    expect(fy.toDate).toBe("2027-03-31");
   });
 });

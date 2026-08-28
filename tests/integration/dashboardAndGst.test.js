@@ -105,6 +105,12 @@ describe("Dashboard & GST API Endpoints", () => {
       expect(prod.quarterlyData[1].quantity).toBe(0);
       expect(prod.quarterlyData[2].quantity).toBe(12);
       expect(prod.quarterlyData[3].quantity).toBe(0);
+
+      // Monthly data (index 6: October) should have 12 qty
+      expect(prod.monthlyData).toBeDefined();
+      expect(prod.monthlyData.length).toBe(12);
+      expect(prod.monthlyData[6].quantity).toBe(12);
+      expect(prod.monthlyData[6].monthName).toBe("Oct");
     });
   });
 
@@ -119,6 +125,29 @@ describe("Dashboard & GST API Endpoints", () => {
       expect(res.body.data.period).toBeDefined();
       expect(res.body.data.summary).toBeDefined();
       expect(res.body.data.invoices).toBeDefined();
+    });
+
+    test("returns monthly GST tax summary when month query is provided", async () => {
+      const res = await request(app)
+        .get("/api/gst/quarterly-summary?financialYear=2026&month=10")
+        .set("Authorization", `Bearer ${authToken}`);
+
+      expect(res.status).toBe(200);
+      expect(res.body.success).toBe(true);
+      expect(res.body.data.period.month).toBe(10);
+      expect(res.body.data.period.fromDate).toBe("2026-10-01");
+      expect(res.body.data.period.toDate).toBe("2026-10-31");
+    });
+
+    test("returns full year GST tax summary when quarter=all is provided", async () => {
+      const res = await request(app)
+        .get("/api/gst/quarterly-summary?financialYear=2026&quarter=all")
+        .set("Authorization", `Bearer ${authToken}`);
+
+      expect(res.status).toBe(200);
+      expect(res.body.success).toBe(true);
+      expect(res.body.data.period.fromDate).toBe("2026-04-01");
+      expect(res.body.data.period.toDate).toBe("2027-03-31");
     });
 
     test("returns 400 for invalid quarter query", async () => {
