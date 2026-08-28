@@ -131,6 +131,35 @@ describe("Invoice API Endpoints", () => {
       expect(res.status).toBe(200);
       expect(res.body.data.items[0].status).toBe("pending");
     });
+
+    test("searches invoices by customer name via search parameter", async () => {
+      const res = await request(app)
+        .get(`/api/invoices?search=${encodeURIComponent(customer.name.slice(0, 4))}`)
+        .set("Authorization", `Bearer ${authToken}`);
+
+      expect(res.status).toBe(200);
+      expect(res.body.data.items.length).toBeGreaterThanOrEqual(1);
+      expect(res.body.data.items[0].customer.name).toBe(customer.name);
+    });
+
+    test("searches invoices by customer name via invoiceNumber parameter (backwards compatibility)", async () => {
+      const res = await request(app)
+        .get(`/api/invoices?invoiceNumber=${encodeURIComponent(customer.name.slice(0, 4))}`)
+        .set("Authorization", `Bearer ${authToken}`);
+
+      expect(res.status).toBe(200);
+      expect(res.body.data.items.length).toBeGreaterThanOrEqual(1);
+      expect(res.body.data.items[0].customer.name).toBe(customer.name);
+    });
+
+    test("returns empty list when search term does not match any customer or invoice", async () => {
+      const res = await request(app)
+        .get("/api/invoices?search=NonExistentCustomerXYZ999")
+        .set("Authorization", `Bearer ${authToken}`);
+
+      expect(res.status).toBe(200);
+      expect(res.body.data.items.length).toBe(0);
+    });
   });
 
   describe("PUT /api/invoices/:id (Cancel invoice restores stock)", () => {

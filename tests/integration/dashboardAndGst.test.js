@@ -46,7 +46,7 @@ describe("Dashboard & GST API Endpoints", () => {
   });
 
   describe("GET /api/dashboard/product-sales", () => {
-    test("returns product-wise sales aggregation", async () => {
+    test("returns product-wise sales aggregation with customerNames", async () => {
       const res = await request(app)
         .get("/api/dashboard/product-sales")
         .set("Authorization", `Bearer ${authToken}`);
@@ -54,6 +54,57 @@ describe("Dashboard & GST API Endpoints", () => {
       expect(res.status).toBe(200);
       expect(res.body.success).toBe(true);
       expect(res.body.data).toBeDefined();
+      expect(res.body.data.products).toBeDefined();
+      if (res.body.data.products.length > 0) {
+        expect(Array.isArray(res.body.data.products[0].customerNames)).toBe(true);
+      }
+    });
+
+    test("searches product sales by customer name", async () => {
+      const res = await request(app)
+        .get("/api/dashboard/product-sales?search=Test%20Customer")
+        .set("Authorization", `Bearer ${authToken}`);
+
+      expect(res.status).toBe(200);
+      expect(res.body.success).toBe(true);
+      expect(res.body.data.products).toBeDefined();
+    });
+
+    test("allocates invoice with next month/quarter date to the correct quarter", async () => {
+      const customer = await createTestCustomer({ name: "Future Buyer", contact: "9876543210" });
+      const medicine = await createTestMedicine({ name: "Future Med" });
+
+      // Create an invoice dated for October 1st (Q3)
+      await request(app)
+        .post("/api/invoices")
+        .set("Authorization", `Bearer ${authToken}`)
+        .send({
+          customer: customer._id,
+          paymentType: "credit",
+          invoiceDate: "2026-10-01",
+          items: [
+            {
+              medicine: medicine._id,
+              medicineName: medicine.name,
+              quantity: 12,
+              rate: 100,
+              gstRate: 5,
+            },
+          ],
+        });
+
+      const res = await request(app)
+        .get("/api/dashboard/product-sales?financialYear=2026&search=Future%20Med")
+        .set("Authorization", `Bearer ${authToken}`);
+
+      expect(res.status).toBe(200);
+      const prod = res.body.data.products.find((p) => p.medicineName === "Future Med");
+      expect(prod).toBeDefined();
+      // Q3 (index 2: Oct - Dec) should have 12 qty, Q1/Q2/Q4 should have 0
+      expect(prod.quarterlyData[0].quantity).toBe(0);
+      expect(prod.quarterlyData[1].quantity).toBe(0);
+      expect(prod.quarterlyData[2].quantity).toBe(12);
+      expect(prod.quarterlyData[3].quantity).toBe(0);
     });
   });
 

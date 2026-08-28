@@ -1,4 +1,5 @@
 const Invoice = require("../models/invoice.model");
+const Customer = require("../models/customer.model");
 const { ERROR_CODES, sendSuccess, sendError } = require("../utils/response");
 const { SUCCESS, ERRORS, getUserMessage } = require("../utils/messages");
 const logger = require("../utils/logger");
@@ -116,6 +117,7 @@ const getAllInvoices = async (req, res) => {
       sortBy = "createdAt",
       order = "desc",
       status,
+      search,
       invoiceNumber,
       customer,
       invoiceType,
@@ -136,10 +138,25 @@ const getAllInvoices = async (req, res) => {
         filter.invoiceType = { $ne: "purchase" };
       }
     }
-    if (invoiceNumber) {
-      filter.invoiceNumber = { $regex: invoiceNumber, $options: "i" };
-    }
     if (customer) filter.customer = customer;
+
+    const searchTerm = (search || invoiceNumber || "").trim();
+    if (searchTerm) {
+      const matchingCustomers = await Customer.find({
+        $or: [
+          { name: { $regex: searchTerm, $options: "i" } },
+          { contact: { $regex: searchTerm, $options: "i" } },
+        ],
+      }).select("_id");
+      const matchingCustomerIds = matchingCustomers.map((c) => c._id);
+
+      filter.$or = [
+        { invoiceNumber: { $regex: searchTerm, $options: "i" } },
+        { customer: { $in: matchingCustomerIds } },
+        { supplier: { $regex: searchTerm, $options: "i" } },
+        { supplierContact: { $regex: searchTerm, $options: "i" } },
+      ];
+    }
 
     const skip = (page - 1) * limit;
     const sortOrder = order === "asc" ? 1 : -1;

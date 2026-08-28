@@ -1,6 +1,7 @@
 const Medicine = require("../models/medicine.model");
 const Customer = require("../models/customer.model");
 const Invoice = require("../models/invoice.model");
+const { getFinancialYearStart } = require("../utils/quarterUtils");
 
 const facetCount = (arr) => arr[0]?.count ?? 0;
 const facetSum = (arr) => arr[0]?.total ?? 0;
@@ -219,10 +220,7 @@ const getInvoiceStatsData = async () => {
 };
 
 function getCurrentFinancialYear() {
-  const now = new Date();
-  const month = now.getMonth() + 1;
-  const year = now.getFullYear();
-  return month >= 4 ? year : year - 1;
+  return getFinancialYearStart();
 }
 
 function getQuarterIndex(month) {
@@ -240,8 +238,8 @@ const getProductWiseMonthlySalesData = async ({ year, financialYear, search } = 
     ? parseInt(year, 10)
     : currentFY;
 
-  const startDate = new Date(Date.UTC(selectedFY, 3, 1, 0, 0, 0));
-  const endDate = new Date(Date.UTC(selectedFY + 1, 2, 31, 23, 59, 59, 999));
+  const startDate = new Date(`${selectedFY}-04-01T00:00:00+05:30`);
+  const endDate = new Date(`${selectedFY + 1}-03-31T23:59:59.999+05:30`);
 
   const matchStage = {
     invoiceType: { $ne: "purchase" },
@@ -253,12 +251,25 @@ const getProductWiseMonthlySalesData = async ({ year, financialYear, search } = 
   const pipeline = [
     { $match: matchStage },
     { $unwind: "$items" },
+    {
+      $lookup: {
+        from: "customers",
+        localField: "customer",
+        foreignField: "_id",
+        as: "customerDoc",
+      },
+    },
+    { $unwind: { path: "$customerDoc", preserveNullAndEmptyArrays: true } },
   ];
 
   if (search && search.trim()) {
+    const sTerm = search.trim();
     pipeline.push({
       $match: {
-        "items.medicineName": { $regex: search.trim(), $options: "i" },
+        $or: [
+          { "items.medicineName": { $regex: sTerm, $options: "i" } },
+          { "customerDoc.name": { $regex: sTerm, $options: "i" } },
+        ],
       },
     });
   }
@@ -267,11 +278,12 @@ const getProductWiseMonthlySalesData = async ({ year, financialYear, search } = 
     $group: {
       _id: {
         medicineName: "$items.medicineName",
-        month: { $month: "$invoiceDate" },
+        month: { $month: { date: "$invoiceDate", timezone: "Asia/Kolkata" } },
       },
       totalQuantity: { $sum: "$items.quantity" },
       totalFree: { $sum: "$items.free" },
       totalRevenue: { $sum: "$items.amount" },
+      customerNames: { $addToSet: { $ifNull: ["$customerDoc.name", "Walk-in Customer"] } },
       invoiceIds: { $addToSet: "$_id" },
     },
   });
@@ -284,9 +296,19 @@ const getProductWiseMonthlySalesData = async ({ year, financialYear, search } = 
       $project: {
         financialYear: {
           $cond: {
-            if: { $gte: [{ $month: "$invoiceDate" }, 4] },
-            then: { $year: "$invoiceDate" },
-            else: { $subtract: [{ $year: "$invoiceDate" }, 1] },
+            if: {
+              $gte: [
+                { $month: { date: "$invoiceDate", timezone: "Asia/Kolkata" } },
+                4,
+              ],
+            },
+            then: { $year: { date: "$invoiceDate", timezone: "Asia/Kolkata" } },
+            else: {
+              $subtract: [
+                { $year: { date: "$invoiceDate", timezone: "Asia/Kolkata" } },
+                1,
+              ],
+            },
           },
         },
       },
@@ -332,6 +354,7 @@ const getProductWiseMonthlySalesData = async ({ year, financialYear, search } = 
     if (!productMap.has(productName)) {
       productMap.set(productName, {
         medicineName: productName,
+        customerNames: [],
         totalQuantity: 0,
         totalFree: 0,
         totalRevenue: 0,
@@ -342,6 +365,13 @@ const getProductWiseMonthlySalesData = async ({ year, financialYear, search } = 
     }
 
     const prod = productMap.get(productName);
+    if (row.customerNames && Array.isArray(row.customerNames)) {
+      row.customerNames.forEach((cName) => {
+        if (cName && !prod.customerNames.includes(cName)) {
+          prod.customerNames.push(cName);
+        }
+      });
+    }
     const revenueVal = Math.round(row.totalRevenue * 100) / 100;
 
     prod.quarterlyData[qIdx].quantity += row.totalQuantity;
@@ -425,8 +455,8 @@ const getCustomerWiseSalesData = async ({ year, financialYear, search } = {}) =>
     ? parseInt(year, 10)
     : currentFY;
 
-  const startDate = new Date(Date.UTC(selectedFY, 3, 1, 0, 0, 0));
-  const endDate = new Date(Date.UTC(selectedFY + 1, 2, 31, 23, 59, 59, 999));
+  const startDate = new Date(`${selectedFY}-04-01T00:00:00+05:30`);
+  const endDate = new Date(`${selectedFY + 1}-03-31T23:59:59.999+05:30`);
 
   const matchStage = {
     invoiceType: { $ne: "purchase" },
@@ -451,7 +481,7 @@ const getCustomerWiseSalesData = async ({ year, financialYear, search } = {}) =>
         _id: {
           customerId: "$customer",
           customerName: { $ifNull: ["$customerDoc.name", "Walk-in Customer"] },
-          month: { $month: "$invoiceDate" },
+          month: { $month: { date: "$invoiceDate", timezone: "Asia/Kolkata" } },
         },
         contact: { $first: "$customerDoc.contact" },
         address: { $first: "$customerDoc.address" },
@@ -483,9 +513,19 @@ const getCustomerWiseSalesData = async ({ year, financialYear, search } = {}) =>
       $project: {
         financialYear: {
           $cond: {
-            if: { $gte: [{ $month: "$invoiceDate" }, 4] },
-            then: { $year: "$invoiceDate" },
-            else: { $subtract: [{ $year: "$invoiceDate" }, 1] },
+            if: {
+              $gte: [
+                { $month: { date: "$invoiceDate", timezone: "Asia/Kolkata" } },
+                4,
+              ],
+            },
+            then: { $year: { date: "$invoiceDate", timezone: "Asia/Kolkata" } },
+            else: {
+              $subtract: [
+                { $year: { date: "$invoiceDate", timezone: "Asia/Kolkata" } },
+                1,
+              ],
+            },
           },
         },
       },
@@ -646,8 +686,8 @@ const getCustomerProductMonthlySalesData = async ({ year, financialYear, custome
     ? parseInt(year, 10)
     : currentFY;
 
-  const startDate = new Date(Date.UTC(selectedFY, 3, 1, 0, 0, 0));
-  const endDate = new Date(Date.UTC(selectedFY + 1, 2, 31, 23, 59, 59, 999));
+  const startDate = new Date(`${selectedFY}-04-01T00:00:00+05:30`);
+  const endDate = new Date(`${selectedFY + 1}-03-31T23:59:59.999+05:30`);
 
   const matchStage = {
     invoiceType: { $ne: "purchase" },
@@ -678,7 +718,7 @@ const getCustomerProductMonthlySalesData = async ({ year, financialYear, custome
           customerId: "$customer",
           customerName: { $ifNull: ["$customerDoc.name", "Walk-in Customer"] },
           medicineName: "$items.medicineName",
-          month: { $month: "$invoiceDate" },
+          month: { $month: { date: "$invoiceDate", timezone: "Asia/Kolkata" } },
         },
         contact: { $first: "$customerDoc.contact" },
         address: { $first: "$customerDoc.address" },
@@ -699,9 +739,19 @@ const getCustomerProductMonthlySalesData = async ({ year, financialYear, custome
       $project: {
         financialYear: {
           $cond: {
-            if: { $gte: [{ $month: "$invoiceDate" }, 4] },
-            then: { $year: "$invoiceDate" },
-            else: { $subtract: [{ $year: "$invoiceDate" }, 1] },
+            if: {
+              $gte: [
+                { $month: { date: "$invoiceDate", timezone: "Asia/Kolkata" } },
+                4,
+              ],
+            },
+            then: { $year: { date: "$invoiceDate", timezone: "Asia/Kolkata" } },
+            else: {
+              $subtract: [
+                { $year: { date: "$invoiceDate", timezone: "Asia/Kolkata" } },
+                1,
+              ],
+            },
           },
         },
       },
