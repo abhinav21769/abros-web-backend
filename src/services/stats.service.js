@@ -275,6 +275,18 @@ const getProductWiseMonthlySalesData = async ({ year, financialYear, search } = 
       },
     },
     { $unwind: { path: "$customerDoc", preserveNullAndEmptyArrays: true } },
+    {
+      // Current name/existence of the medicine, so two products merged after
+      // the fact (or simply renamed) report as one instead of staying split
+      // by whatever name happened to be on each invoice line at sale time.
+      $lookup: {
+        from: "medicines",
+        localField: "items.medicine",
+        foreignField: "_id",
+        as: "medicineDoc",
+      },
+    },
+    { $unwind: { path: "$medicineDoc", preserveNullAndEmptyArrays: true } },
   ];
 
   if (search && search.trim()) {
@@ -283,6 +295,7 @@ const getProductWiseMonthlySalesData = async ({ year, financialYear, search } = 
       $match: {
         $or: [
           { "items.medicineName": { $regex: sTerm, $options: "i" } },
+          { "medicineDoc.name": { $regex: sTerm, $options: "i" } },
           { "customerDoc.name": { $regex: sTerm, $options: "i" } },
         ],
       },
@@ -292,9 +305,13 @@ const getProductWiseMonthlySalesData = async ({ year, financialYear, search } = 
   pipeline.push({
     $group: {
       _id: {
-        medicineName: "$items.medicineName",
+        // Group by the medicine's stable _id, not its historical name
+        // snapshot - falls back to the name only for the rare line that has
+        // no medicine reference at all.
+        medicineKey: { $ifNull: ["$items.medicine", "$items.medicineName"] },
         month: { $month: { date: "$invoiceDate", timezone: "Asia/Kolkata" } },
       },
+      medicineName: { $first: { $ifNull: ["$medicineDoc.name", "$items.medicineName"] } },
       totalQuantity: { $sum: "$items.quantity" },
       totalFree: { $sum: "$items.free" },
       totalRevenue: { $sum: "$items.amount" },
@@ -304,6 +321,38 @@ const getProductWiseMonthlySalesData = async ({ year, financialYear, search } = 
   });
 
   const aggregateResults = await Invoice.aggregate(pipeline);
+
+  // Separate FY-total (no month dimension) aggregation by batch, attached to
+  // each product below so the UI can offer a per-batch breakdown without
+  // exploding the month/quarter grouping above into one row per batch.
+  const batchPipeline = [
+    { $match: matchStage },
+    { $unwind: "$items" },
+    {
+      $group: {
+        _id: {
+          medicineKey: { $ifNull: ["$items.medicine", "$items.medicineName"] },
+          batchNumber: { $ifNull: ["$items.batchNumber", "Unspecified"] },
+        },
+        totalQuantity: { $sum: "$items.quantity" },
+        totalFree: { $sum: "$items.free" },
+        totalRevenue: { $sum: "$items.amount" },
+      },
+    },
+  ];
+  const batchResults = await Invoice.aggregate(batchPipeline);
+  const batchBreakdownByProduct = new Map();
+  batchResults.forEach((row) => {
+    const key = String(row._id.medicineKey);
+    if (!batchBreakdownByProduct.has(key)) batchBreakdownByProduct.set(key, []);
+    batchBreakdownByProduct.get(key).push({
+      batchNumber: row._id.batchNumber,
+      totalQuantity: row.totalQuantity,
+      totalFree: row.totalFree || 0,
+      totalRevenue: Math.round(row.totalRevenue * 100) / 100,
+    });
+  });
+  batchBreakdownByProduct.forEach((batches) => batches.sort((a, b) => b.totalRevenue - a.totalRevenue));
 
   const fyResults = await Invoice.aggregate([
     { $match: { invoiceType: { $ne: "purchase" }, status: { $in: ["paid", "pending"] } } },
@@ -358,14 +407,17 @@ const getProductWiseMonthlySalesData = async ({ year, financialYear, search } = 
     .map((_, i) => ({ monthName: MONTH_LABELS[i], monthNumber: i < 9 ? i + 4 : i - 8, quantity: 0, free: 0, revenue: 0 }));
 
   aggregateResults.forEach((row) => {
-    const productName = row._id.medicineName || "Unknown Product";
+    const productKey = String(row._id.medicineKey);
+    const productName = row.medicineName || "Unknown Product";
     const month = row._id.month;
     const qIdx = getQuarterIndex(month);
     const mIdx = getFYMonthIndex(month);
 
-    if (!productMap.has(productName)) {
-      productMap.set(productName, {
+    if (!productMap.has(productKey)) {
+      productMap.set(productKey, {
+        id: productKey,
         medicineName: productName,
+        batchBreakdown: batchBreakdownByProduct.get(productKey) || [],
         customerNames: [],
         totalQuantity: 0,
         totalFree: 0,
@@ -379,7 +431,7 @@ const getProductWiseMonthlySalesData = async ({ year, financialYear, search } = 
       });
     }
 
-    const prod = productMap.get(productName);
+    const prod = productMap.get(productKey);
     if (row.customerNames && Array.isArray(row.customerNames)) {
       row.customerNames.forEach((cName) => {
         if (cName && !prod.customerNames.includes(cName)) {
@@ -729,13 +781,25 @@ const getCustomerProductMonthlySalesData = async ({ year, financialYear, custome
     },
     { $unwind: { path: "$customerDoc", preserveNullAndEmptyArrays: true } },
     {
+      // Current name/existence of the medicine, so a merge or rename doesn't
+      // leave this customer's history split across two product rows.
+      $lookup: {
+        from: "medicines",
+        localField: "items.medicine",
+        foreignField: "_id",
+        as: "medicineDoc",
+      },
+    },
+    { $unwind: { path: "$medicineDoc", preserveNullAndEmptyArrays: true } },
+    {
       $group: {
         _id: {
           customerId: "$customer",
           customerName: { $ifNull: ["$customerDoc.name", "Walk-in Customer"] },
-          medicineName: "$items.medicineName",
+          medicineKey: { $ifNull: ["$items.medicine", "$items.medicineName"] },
           month: { $month: { date: "$invoiceDate", timezone: "Asia/Kolkata" } },
         },
+        medicineName: { $first: { $ifNull: ["$medicineDoc.name", "$items.medicineName"] } },
         contact: { $first: "$customerDoc.contact" },
         address: { $first: "$customerDoc.address" },
         gstin: { $first: "$customerDoc.gstin" },
@@ -803,7 +867,8 @@ const getCustomerProductMonthlySalesData = async ({ year, financialYear, custome
   aggregateResults.forEach((row) => {
     const custIdStr = row._id.customerId ? String(row._id.customerId) : "walk-in";
     const custName = row._id.customerName || "Walk-in Customer";
-    const prodName = row._id.medicineName || "Unknown Product";
+    const prodKey = String(row._id.medicineKey);
+    const prodName = row.medicineName || "Unknown Product";
     const month = row._id.month;
     const fyMonthIdx = getFYMonthIndex(month);
     const qIdx = getQuarterIndex(month);
@@ -835,8 +900,9 @@ const getCustomerProductMonthlySalesData = async ({ year, financialYear, custome
     const qtyVal = row.totalQuantity || 0;
     const freeVal = row.totalFree || 0;
 
-    if (!custObj.productsMap.has(prodName)) {
-      custObj.productsMap.set(prodName, {
+    if (!custObj.productsMap.has(prodKey)) {
+      custObj.productsMap.set(prodKey, {
+        id: prodKey,
         medicineName: prodName,
         totalRevenue: 0,
         totalQuantity: 0,
@@ -850,7 +916,7 @@ const getCustomerProductMonthlySalesData = async ({ year, financialYear, custome
       });
     }
 
-    const prodObj = custObj.productsMap.get(prodName);
+    const prodObj = custObj.productsMap.get(prodKey);
 
     prodObj.monthlyData[fyMonthIdx].quantity += qtyVal;
     prodObj.monthlyData[fyMonthIdx].free += freeVal;

@@ -112,6 +112,109 @@ describe("Dashboard & GST API Endpoints", () => {
       expect(prod.monthlyData[6].quantity).toBe(12);
       expect(prod.monthlyData[6].monthName).toBe("Oct");
     });
+
+    test("reports two invoices against the same medicine as one product, under its current name, even if their line items snapshot different historical names", async () => {
+      // Simulates a merge: two invoices billed under different name spellings
+      // (e.g. before a duplicate-medicine merge) but pointing at the same
+      // medicine _id going forward.
+      const customer = await createTestCustomer({ name: "Merge Test Buyer", contact: "9123456780" });
+      const medicine = await createTestMedicine({ name: "Tab Rosmont-L" });
+
+      await request(app)
+        .post("/api/invoices")
+        .set("Authorization", `Bearer ${authToken}`)
+        .send({
+          customer: customer._id,
+          paymentType: "cash",
+          items: [
+            {
+              medicine: medicine._id,
+              medicineName: "Tab Rosmont-L",
+              quantity: 10,
+              rate: 50,
+              gstRate: 5,
+            },
+          ],
+        });
+
+      await request(app)
+        .post("/api/invoices")
+        .set("Authorization", `Bearer ${authToken}`)
+        .send({
+          customer: customer._id,
+          paymentType: "cash",
+          items: [
+            {
+              // Same medicine _id, but a different historical name snapshot -
+              // exactly what a merged/renamed duplicate leaves behind.
+              medicine: medicine._id,
+              medicineName: "Tab. Rosmont - L",
+              quantity: 4,
+              rate: 50,
+              gstRate: 5,
+            },
+          ],
+        });
+
+      const res = await request(app)
+        .get(`/api/dashboard/product-sales?search=${encodeURIComponent(medicine.name)}`)
+        .set("Authorization", `Bearer ${authToken}`);
+
+      expect(res.status).toBe(200);
+      const matches = res.body.data.products.filter((p) =>
+        p.medicineName.toLowerCase().includes("rosmont")
+      );
+      expect(matches.length).toBe(1);
+      expect(matches[0].medicineName).toBe("Tab Rosmont-L");
+      expect(matches[0].totalQuantity).toBe(14);
+      expect(matches[0].id).toBe(String(medicine._id));
+    });
+
+    test("attaches a per-batch revenue/quantity breakdown to each product", async () => {
+      const customer = await createTestCustomer();
+      const medicine = await createTestMedicine({
+        name: "Multi Batch Med",
+        batches: [
+          { batchNumber: "BATCH-A", expiryDate: new Date(Date.now() + 365 * 86400000), mrp: 100, rate: 80, ptr: 75, quantity: 50 },
+          { batchNumber: "BATCH-B", expiryDate: new Date(Date.now() + 400 * 86400000), mrp: 100, rate: 80, ptr: 75, quantity: 50 },
+        ],
+      });
+
+      await request(app)
+        .post("/api/invoices")
+        .set("Authorization", `Bearer ${authToken}`)
+        .send({
+          customer: customer._id,
+          paymentType: "cash",
+          items: [
+            { medicine: medicine._id, medicineName: medicine.name, batchNumber: "BATCH-A", quantity: 5, rate: 80, gstRate: 5 },
+          ],
+        });
+      await request(app)
+        .post("/api/invoices")
+        .set("Authorization", `Bearer ${authToken}`)
+        .send({
+          customer: customer._id,
+          paymentType: "cash",
+          items: [
+            { medicine: medicine._id, medicineName: medicine.name, batchNumber: "BATCH-B", quantity: 3, rate: 80, gstRate: 5 },
+          ],
+        });
+
+      const res = await request(app)
+        .get(`/api/dashboard/product-sales?search=${encodeURIComponent(medicine.name)}`)
+        .set("Authorization", `Bearer ${authToken}`);
+
+      expect(res.status).toBe(200);
+      const prod = res.body.data.products.find((p) => p.medicineName === "Multi Batch Med");
+      expect(prod).toBeDefined();
+      expect(prod.batchBreakdown).toBeDefined();
+      expect(prod.batchBreakdown.length).toBe(2);
+      const batchA = prod.batchBreakdown.find((b) => b.batchNumber === "BATCH-A");
+      const batchB = prod.batchBreakdown.find((b) => b.batchNumber === "BATCH-B");
+      expect(batchA.totalQuantity).toBe(5);
+      expect(batchB.totalQuantity).toBe(3);
+    });
   });
 
   describe("GET /api/gst/quarterly-summary", () => {
