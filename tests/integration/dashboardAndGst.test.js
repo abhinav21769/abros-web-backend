@@ -215,6 +215,44 @@ describe("Dashboard & GST API Endpoints", () => {
       expect(batchA.totalQuantity).toBe(5);
       expect(batchB.totalQuantity).toBe(3);
     });
+
+    test("includes a batch that has current stock but no sales this year, alongside stock context for sold batches", async () => {
+      const customer = await createTestCustomer();
+      const medicine = await createTestMedicine({
+        name: "Unsold Batch Med",
+        batches: [
+          { batchNumber: "SOLD-01", expiryDate: new Date(Date.now() + 365 * 86400000), mrp: 100, rate: 80, ptr: 75, quantity: 45 },
+          { batchNumber: "FRESH-02", expiryDate: new Date(Date.now() + 400 * 86400000), mrp: 100, rate: 80, ptr: 75, quantity: 60 },
+        ],
+      });
+
+      await request(app)
+        .post("/api/invoices")
+        .set("Authorization", `Bearer ${authToken}`)
+        .send({
+          customer: customer._id,
+          paymentType: "cash",
+          items: [
+            { medicine: medicine._id, medicineName: medicine.name, batchNumber: "SOLD-01", quantity: 5, rate: 80, gstRate: 5 },
+          ],
+        });
+
+      const res = await request(app)
+        .get(`/api/dashboard/product-sales?search=${encodeURIComponent(medicine.name)}`)
+        .set("Authorization", `Bearer ${authToken}`);
+
+      expect(res.status).toBe(200);
+      const prod = res.body.data.products.find((p) => p.medicineName === "Unsold Batch Med");
+      expect(prod).toBeDefined();
+      // Both batches should appear even though FRESH-02 has never been sold.
+      expect(prod.batchBreakdown.length).toBe(2);
+      const sold = prod.batchBreakdown.find((b) => b.batchNumber === "SOLD-01");
+      const unsold = prod.batchBreakdown.find((b) => b.batchNumber === "FRESH-02");
+      expect(sold.totalQuantity).toBe(5);
+      expect(sold.currentStock).toBe(40); // 45 - 5 sold
+      expect(unsold.totalQuantity).toBe(0);
+      expect(unsold.currentStock).toBe(60);
+    });
   });
 
   describe("GET /api/gst/quarterly-summary", () => {

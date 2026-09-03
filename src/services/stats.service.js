@@ -1,3 +1,4 @@
+const mongoose = require("mongoose");
 const Medicine = require("../models/medicine.model");
 const Customer = require("../models/customer.model");
 const Invoice = require("../models/invoice.model");
@@ -352,6 +353,39 @@ const getProductWiseMonthlySalesData = async ({ year, financialYear, search } = 
       totalRevenue: Math.round(row.totalRevenue * 100) / 100,
     });
   });
+  // A batch can carry current stock with zero recorded sales this FY (e.g.
+  // freshly purchased, or merged in from another medicine) - list it too,
+  // rather than only ever showing batches that happen to have a sale.
+  const medicineIdsWithBatches = Array.from(batchBreakdownByProduct.keys()).filter((k) =>
+    mongoose.isValidObjectId(k),
+  );
+  const currentMedicines = await Medicine.find(
+    { _id: { $in: medicineIdsWithBatches } },
+    { batches: 1 },
+  );
+  currentMedicines.forEach((med) => {
+    const key = String(med._id);
+    const existing = batchBreakdownByProduct.get(key) || [];
+    const byNumber = new Map(existing.map((b) => [b.batchNumber.toLowerCase(), b]));
+    (med.batches || []).forEach((b) => {
+      if (!b.batchNumber) return;
+      const match = byNumber.get(b.batchNumber.toLowerCase());
+      if (match) {
+        // Already has sales this FY - just add the current stock context.
+        match.currentStock = b.quantity;
+      } else {
+        existing.push({
+          batchNumber: b.batchNumber,
+          totalQuantity: 0,
+          totalFree: 0,
+          totalRevenue: 0,
+          currentStock: b.quantity,
+        });
+      }
+    });
+    batchBreakdownByProduct.set(key, existing);
+  });
+
   batchBreakdownByProduct.forEach((batches) => batches.sort((a, b) => b.totalRevenue - a.totalRevenue));
 
   const fyResults = await Invoice.aggregate([
