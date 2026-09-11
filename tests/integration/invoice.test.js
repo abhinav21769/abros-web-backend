@@ -511,7 +511,7 @@ describe("Invoice API Endpoints", () => {
     });
   });
 
-  describe("M-10: deleting an invoice keeps the record and its number", () => {
+  describe("cancelling an invoice removes it and frees its number", () => {
     const createInvoice = () =>
       request(app)
         .post("/api/invoices")
@@ -529,7 +529,7 @@ describe("Invoice API Endpoints", () => {
           ],
         });
 
-    test("the invoice is retained, marked deleted, and hidden everywhere", async () => {
+    test("the invoice is removed from the database", async () => {
       const created = await createInvoice();
       const invoiceId = created.body.data._id;
 
@@ -538,15 +538,6 @@ describe("Invoice API Endpoints", () => {
         .set("Authorization", `Bearer ${authToken}`);
       expect(res.status).toBe(200);
 
-      // The document survives...
-      const retained = await Invoice.findById(invoiceId)
-        .setOptions({ withDeleted: true })
-        .lean();
-      expect(retained).not.toBeNull();
-      expect(retained.deletedAt).toBeInstanceOf(Date);
-      expect(retained.status).toBe("cancelled");
-
-      // ...but nothing in the app can see it.
       expect(await Invoice.findById(invoiceId)).toBeNull();
 
       const list = await request(app)
@@ -560,7 +551,7 @@ describe("Invoice API Endpoints", () => {
       expect(fetched.status).toBe(404);
     });
 
-    test("the deleted invoice number is never handed out again", async () => {
+    test("the cancelled invoice number is handed out again", async () => {
       const created = await createInvoice();
       const usedNumber = created.body.data.invoiceNumber;
 
@@ -572,7 +563,26 @@ describe("Invoice API Endpoints", () => {
         .get("/api/invoices/generate-number")
         .set("Authorization", `Bearer ${authToken}`);
 
-      expect(next.body.data.invoiceNumber).not.toBe(usedNumber);
+      expect(next.body.data.invoiceNumber).toBe(usedNumber);
+    });
+
+    test("marking an invoice cancelled removes it and frees its number", async () => {
+      const created = await createInvoice();
+      const invoiceId = created.body.data._id;
+      const usedNumber = created.body.data.invoiceNumber;
+
+      const res = await request(app)
+        .put(`/api/invoices/${invoiceId}`)
+        .set("Authorization", `Bearer ${authToken}`)
+        .send({ status: "cancelled" });
+      expect(res.status).toBe(200);
+
+      expect(await Invoice.findById(invoiceId)).toBeNull();
+
+      const next = await request(app)
+        .get("/api/invoices/generate-number")
+        .set("Authorization", `Bearer ${authToken}`);
+      expect(next.body.data.invoiceNumber).toBe(usedNumber);
     });
 
     test("deleting still returns the stock to inventory", async () => {

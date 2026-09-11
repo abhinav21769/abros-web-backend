@@ -124,10 +124,8 @@ const getCustomerStatsData = async () => {
 };
 
 const getInvoiceStatsData = async () => {
-  // Aggregation pipelines bypass the schema's deleted-invoice filter, so the
-  // condition is repeated in every $match that reads invoices.
-  const saleMatch = { invoiceType: { $ne: "purchase" }, deletedAt: null };
-  const purchaseMatch = { invoiceType: "purchase", deletedAt: null };
+  const saleMatch = { invoiceType: { $ne: "purchase" } };
+  const purchaseMatch = { invoiceType: "purchase" };
 
   const [salesFacet, purchasesFacet, recentSales, recentPurchases] =
     await Promise.all([
@@ -261,7 +259,6 @@ const getProductWiseMonthlySalesData = async ({ year, financialYear, search } = 
     invoiceType: { $ne: "purchase" },
     status: { $in: ["paid", "pending"] },
     invoiceDate: { $gte: startDate, $lte: endDate },
-    deletedAt: null,
   };
 
   const pipeline = [
@@ -572,7 +569,6 @@ const getCustomerWiseSalesData = async ({ year, financialYear, search } = {}) =>
     invoiceType: { $ne: "purchase" },
     status: { $in: ["paid", "pending"] },
     invoiceDate: { $gte: startDate, $lte: endDate },
-    deletedAt: null,
   };
 
   const pipeline = [
@@ -795,7 +791,6 @@ const getCustomerProductMonthlySalesData = async ({ year, financialYear, custome
     invoiceType: { $ne: "purchase" },
     status: { $in: ["paid", "pending"] },
     invoiceDate: { $gte: startDate, $lte: endDate },
-    deletedAt: null,
   };
 
   if (customerId && customerId !== "all" && customerId !== "walk-in") {

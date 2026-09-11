@@ -280,6 +280,16 @@ const updateInvoice = async (req, res) => {
         },
       );
 
+      // Cancelling is not a state the app stores: the bill is removed so its
+      // number returns to the series. Stock was already put back above.
+      if (newStatus === "cancelled") {
+        await existing.deleteOne({ session });
+        // Reported back as cancelled even though nothing was written, so the
+        // caller sees the outcome it asked for.
+        existing.status = "cancelled";
+        return existing;
+      }
+
       return Invoice.findByIdAndUpdate(req.params.id, updateData, {
         new: true,
         runValidators: true,
@@ -300,7 +310,10 @@ const updateInvoice = async (req, res) => {
     await invoice.populate("items.medicine", MEDICINE_POPULATE_FIELDS);
 
     return sendSuccess(res, {
-      message: SUCCESS.invoice.updated,
+      message:
+        invoice.status === "cancelled"
+          ? SUCCESS.invoice.deleted
+          : SUCCESS.invoice.updated,
       data: invoice,
     });
   } catch (error) {
@@ -352,12 +365,12 @@ const deleteInvoice = async (req, res) => {
         }
       }
 
-      // M-10 FIX: the record and its number stay; it just stops being visible.
-      existing.deletedAt = new Date();
-      existing.status = "cancelled";
-      await existing.save({ session });
+      // A cancelled bill is not kept: the record is removed so its number goes
+      // back to the series and the next invoice reuses it instead of skipping.
+      const removed = existing.toObject();
+      await existing.deleteOne({ session });
 
-      return existing;
+      return removed;
     });
 
     if (!invoice) {

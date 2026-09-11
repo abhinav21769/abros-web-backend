@@ -122,7 +122,7 @@ async function confirm(question) {
 
 async function countReferences(loserId) {
   const [invoices, purchases, ledgerEntries] = await Promise.all([
-    Invoice.countDocuments({ "items.medicine": loserId }).setOptions({ withDeleted: true }),
+    Invoice.countDocuments({ "items.medicine": loserId }),
     Purchase.countDocuments({ "items.medicine": loserId }),
     StockLedger.countDocuments({ medicine: loserId }),
   ]);

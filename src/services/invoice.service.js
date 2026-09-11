@@ -55,6 +55,9 @@ const generateInvoiceNumberValue = async (invoiceType = "sale") => {
 
   const query = {
     invoiceType: isPurchase ? "purchase" : { $in: ["sale", null] },
+    // A cancelled bill does not advance the series. Cancelling removes the
+    // record outright, so this only guards rows cancelled before that change.
+    status: { $ne: "cancelled" },
     $or: legacyPrefixes.map((legacyPrefix) => ({
       invoiceNumber: {
         $regex: `^${escapeRegex(legacyPrefix)}`,
@@ -63,9 +66,7 @@ const generateInvoiceNumberValue = async (invoiceType = "sale") => {
     })),
   };
 
-  // Deleted invoices still hold their number, so the series never reuses one.
   const existingInvoices = await Invoice.find(query)
-    .setOptions({ withDeleted: true })
     .select("invoiceNumber")
     .lean();
 
@@ -82,8 +83,9 @@ const generateInvoiceNumberValue = async (invoiceType = "sale") => {
   let nextNum = maxNum + 1;
   let candidate = `${prefix}${String(nextNum).padStart(3, "0")}`;
 
-  const numberTaken = (value) =>
-    Invoice.exists({ invoiceNumber: value }).setOptions({ withDeleted: true });
+  // invoiceNumber is unique across the collection, so the candidate is checked
+  // against every stored invoice - including any legacy cancelled one.
+  const numberTaken = (value) => Invoice.exists({ invoiceNumber: value });
 
   let exists = await numberTaken(candidate);
   while (exists) {
