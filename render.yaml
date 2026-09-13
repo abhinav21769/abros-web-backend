@@ -1,8 +1,10 @@
 services:
+  # Production API — deploys from the `prod` branch
   - type: web
     name: abros-healthcare
     runtime: node
     plan: free
+    branch: prod
     buildCommand: npm install
     startCommand: npm start
     healthCheckPath: /health
@@ -23,6 +25,40 @@ services:
         value: false
       - key: TELEGRAM_WEBHOOK_SECRET
         sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: GEMINI_MODEL
+        value: gemini-2.5-flash
+      - key: SENTRY_DSN
+        sync: false
+
+  # Dev API — deploys from the `dev` branch, own MONGO_URI (separate database)
+  - type: web
+    name: abros-healthcare-dev
+    runtime: node
+    plan: free
+    branch: dev
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: CORS_ALLOWED_ORIGINS
+        value: https://abros-healthcare-dev.web.app,https://abros-healthcare-dev.firebaseapp.com,http://localhost:5173,http://localhost:4173
+      - key: MONGO_URI
+        sync: false
+      - key: JWT_SECRET
+        sync: false
+      - key: ADMIN_SECRET
+        sync: false
+      # Telegram bot stays off on dev: one bot token can only be polled by one
+      # process, and a second poller would steal production's updates. Leave
+      # TELEGRAM_BOT_TOKEN unset here on purpose.
+      - key: TELEGRAM_ENABLE_POLLING
+        value: false
+      - key: TELEGRAM_DISABLE_POLLING
+        value: true
       - key: GEMINI_API_KEY
         sync: false
       - key: GEMINI_MODEL
