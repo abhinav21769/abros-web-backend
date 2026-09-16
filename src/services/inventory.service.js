@@ -155,14 +155,16 @@ function snapshotBatch(batch) {
  * Otherwise, auto-allocates stock using FEFO (First Expiry First Out).
  * Also populates missing batchNumber/expiryDate/mrp back onto item objects.
  */
-async function deductStockForItems(items = [], session = null, ledgerMeta = null) {
+async function deductStockForItems(company, items = [], session = null, ledgerMeta = null) {
   for (const item of items) {
     await withStockWriteRetry(session, async () => {
       const medicineId = getMedicineId(item);
       const units = getUnitsPerLineItem(item);
       if (!medicineId || units <= 0) return;
 
-      let query = Medicine.findById(medicineId);
+      // Scoped by company: an id belonging to another tenant simply does not
+      // resolve, so one tenant can never move another's stock.
+      let query = Medicine.findOne({ _id: medicineId, company });
       if (session) query = query.session(session);
       const medicine = await query;
 
@@ -210,6 +212,7 @@ async function deductStockForItems(items = [], session = null, ledgerMeta = null
         if (ledgerMeta) {
           await recordLedgerEntry(
             {
+              company,
               medicine: medicine._id,
               medicineName: medicine.name,
               batchNumber: batch.batchNumber,
@@ -268,6 +271,7 @@ async function deductStockForItems(items = [], session = null, ledgerMeta = null
           for (const ld of ledgerDeductions) {
             await recordLedgerEntry(
               {
+                company,
                 medicine: medicine._id,
                 medicineName: medicine.name,
                 batchNumber: ld.batchNumber,
@@ -293,14 +297,16 @@ async function deductStockForItems(items = [], session = null, ledgerMeta = null
  * If batch exists under medicine, quantity is incremented.
  * If batch does not exist, a new batch is appended to medicine.
  */
-async function addStockForItems(items = [], session = null, ledgerMeta = null) {
+async function addStockForItems(company, items = [], session = null, ledgerMeta = null) {
   for (const item of items) {
     await withStockWriteRetry(session, async () => {
       const medicineId = getMedicineId(item);
       const units = getUnitsPerLineItem(item);
       if (!medicineId || units <= 0) return;
 
-      let query = Medicine.findById(medicineId);
+      // Scoped by company: an id belonging to another tenant simply does not
+      // resolve, so one tenant can never move another's stock.
+      let query = Medicine.findOne({ _id: medicineId, company });
       if (session) query = query.session(session);
       const medicine = await query;
 
@@ -345,6 +351,7 @@ async function addStockForItems(items = [], session = null, ledgerMeta = null) {
       if (ledgerMeta) {
         await recordLedgerEntry(
           {
+            company,
             medicine: medicine._id,
             medicineName: medicine.name,
             batchNumber: batchNum,
@@ -372,14 +379,16 @@ async function addStockForItems(items = [], session = null, ledgerMeta = null) {
  * year out, quietly destroying cost price, MRP and expiry tracking. Restoring is
  * not purchasing: the quantity goes back, cost and expiry never move.
  */
-async function restoreStockForItems(items = [], session = null, ledgerMeta = null) {
+async function restoreStockForItems(company, items = [], session = null, ledgerMeta = null) {
   for (const item of items) {
     await withStockWriteRetry(session, async () => {
       const medicineId = getMedicineId(item);
       const units = getUnitsPerLineItem(item);
       if (!medicineId || units <= 0) return;
 
-      let query = Medicine.findById(medicineId);
+      // Scoped by company: an id belonging to another tenant simply does not
+      // resolve, so one tenant can never move another's stock.
+      let query = Medicine.findOne({ _id: medicineId, company });
       if (session) query = query.session(session);
       const medicine = await query;
 
@@ -437,6 +446,7 @@ async function restoreStockForItems(items = [], session = null, ledgerMeta = nul
       if (ledgerMeta) {
         await recordLedgerEntry(
           {
+            company,
             medicine: medicine._id,
             medicineName: medicine.name,
             batchNumber: batchNum,
@@ -459,6 +469,7 @@ async function restoreStockForItems(items = [], session = null, ledgerMeta = nul
  * Handles stock adjustments when an invoice is updated or cancelled.
  */
 async function syncInvoiceStockChanges(
+  company,
   oldItems = [],
   oldStatus = "pending",
   newItems = [],
@@ -472,23 +483,23 @@ async function syncInvoiceStockChanges(
 
   if (wasActive && !isActive) {
     if (invoiceType === "purchase") {
-      await deductStockForItems(oldItems, session, { type: "adjustment", ...ledgerMeta });
+      await deductStockForItems(company, oldItems, session, { type: "adjustment", ...ledgerMeta });
     } else {
-      await restoreStockForItems(oldItems, session, ledgerMeta);
+      await restoreStockForItems(company, oldItems, session, ledgerMeta);
     }
   } else if (!wasActive && isActive) {
     if (invoiceType === "purchase") {
-      await addStockForItems(newItems, session, ledgerMeta);
+      await addStockForItems(company, newItems, session, ledgerMeta);
     } else {
-      await deductStockForItems(newItems, session, ledgerMeta);
+      await deductStockForItems(company, newItems, session, ledgerMeta);
     }
   } else if (wasActive && isActive) {
     if (invoiceType === "purchase") {
-      await deductStockForItems(oldItems, session, { type: "adjustment", ...ledgerMeta });
-      await addStockForItems(newItems, session, ledgerMeta);
+      await deductStockForItems(company, oldItems, session, { type: "adjustment", ...ledgerMeta });
+      await addStockForItems(company, newItems, session, ledgerMeta);
     } else {
-      await restoreStockForItems(oldItems, session, ledgerMeta);
-      await deductStockForItems(newItems, session, ledgerMeta);
+      await restoreStockForItems(company, oldItems, session, ledgerMeta);
+      await deductStockForItems(company, newItems, session, ledgerMeta);
     }
   }
 }

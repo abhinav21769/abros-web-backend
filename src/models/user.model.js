@@ -1,8 +1,18 @@
 const mongoose = require("mongoose");
 const bcrypt = require("bcryptjs");
 
+// admin: full access. viewer: read-only - every mutating route is blocked and
+// the UI hides the controls that would call them.
+const ROLES = ["admin", "viewer"];
+
 const userSchema = new mongoose.Schema(
   {
+    company: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Company",
+      required: [true, "Company is required"],
+      index: true,
+    },
     username: {
       type: String,
       required: [true, "Username is required"],
@@ -20,6 +30,12 @@ const userSchema = new mongoose.Schema(
     name: {
       type: String,
       trim: true,
+    },
+    role: {
+      type: String,
+      enum: ROLES,
+      default: "viewer",
+      required: true,
     },
     isActive: {
       type: Boolean,
@@ -47,3 +63,4 @@ userSchema.methods.comparePassword = function comparePassword(candidate) {
 const User = mongoose.model("User", userSchema);
 
 module.exports = User;
+module.exports.ROLES = ROLES;

@@ -25,6 +25,7 @@ const router = express.Router();
 
 router.post("/login", loginLimiter, authController.login);
 router.get("/me", authenticate, authController.getMe);
+router.post("/companies", requireAdminSecret, authController.createCompany);
 router.post("/users", requireAdminSecret, authController.createUser);
 
 module.exports = router;

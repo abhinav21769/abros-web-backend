@@ -7,12 +7,12 @@ const { getFinancialYearStart } = require("../utils/quarterUtils");
 const facetCount = (arr) => arr[0]?.count ?? 0;
 const facetSum = (arr) => arr[0]?.total ?? 0;
 
-const getInventoryStatsData = async (days = 30) => {
+const getInventoryStatsData = async (company, days = 30) => {
   const today = new Date();
   const futureDate = new Date();
   futureDate.setDate(today.getDate() + days);
 
-  const medicines = await Medicine.find().lean();
+  const medicines = await Medicine.find({ company }).lean();
 
   let totalProducts = medicines.length;
   let activeStockCount = 0;
@@ -114,8 +114,8 @@ const getInventoryStatsData = async (days = 30) => {
   };
 };
 
-const getCustomerStatsData = async () => {
-  const totalCustomers = await Customer.countDocuments();
+const getCustomerStatsData = async (company) => {
+  const totalCustomers = await Customer.countDocuments({ company });
   return {
     stats: {
       totalCustomers,
@@ -123,9 +123,9 @@ const getCustomerStatsData = async () => {
   };
 };
 
-const getInvoiceStatsData = async () => {
-  const saleMatch = { invoiceType: { $ne: "purchase" } };
-  const purchaseMatch = { invoiceType: "purchase" };
+const getInvoiceStatsData = async (company) => {
+  const saleMatch = { company, invoiceType: { $ne: "purchase" } };
+  const purchaseMatch = { company, invoiceType: "purchase" };
 
   const [salesFacet, purchasesFacet, recentSales, recentPurchases] =
     await Promise.all([
@@ -244,7 +244,12 @@ function getQuarterIndex(month) {
   return 3; // Q4 (Jan - Mar)
 }
 
-const getProductWiseMonthlySalesData = async ({ year, financialYear, search } = {}) => {
+const getProductWiseMonthlySalesData = async ({
+  company,
+  year,
+  financialYear,
+  search,
+} = {}) => {
   const currentFY = getCurrentFinancialYear();
   const selectedFY = financialYear
     ? parseInt(financialYear, 10)
@@ -256,6 +261,7 @@ const getProductWiseMonthlySalesData = async ({ year, financialYear, search } = 
   const endDate = new Date(`${selectedFY + 1}-03-31T23:59:59.999+05:30`);
 
   const matchStage = {
+    company,
     invoiceType: { $ne: "purchase" },
     status: { $in: ["paid", "pending"] },
     invoiceDate: { $gte: startDate, $lte: endDate },
@@ -357,7 +363,7 @@ const getProductWiseMonthlySalesData = async ({ year, financialYear, search } = 
     mongoose.isValidObjectId(k),
   );
   const currentMedicines = await Medicine.find(
-    { _id: { $in: medicineIdsWithBatches } },
+    { company, _id: { $in: medicineIdsWithBatches } },
     { batches: 1 },
   );
   currentMedicines.forEach((med) => {
@@ -386,7 +392,7 @@ const getProductWiseMonthlySalesData = async ({ year, financialYear, search } = 
   batchBreakdownByProduct.forEach((batches) => batches.sort((a, b) => b.totalRevenue - a.totalRevenue));
 
   const fyResults = await Invoice.aggregate([
-    { $match: { invoiceType: { $ne: "purchase" }, status: { $in: ["paid", "pending"] } } },
+    { $match: { company, invoiceType: { $ne: "purchase" }, status: { $in: ["paid", "pending"] } } },
     {
       $project: {
         financialYear: {
@@ -544,17 +550,22 @@ const getProductWiseMonthlySalesData = async ({ year, financialYear, search } = 
   };
 };
 
-const getDashboardStatsData = async (days = 30) => {
+const getDashboardStatsData = async (company, days = 30) => {
   const [inventory, customers, invoices] = await Promise.all([
-    getInventoryStatsData(days),
-    getCustomerStatsData(),
-    getInvoiceStatsData(),
+    getInventoryStatsData(company, days),
+    getCustomerStatsData(company),
+    getInvoiceStatsData(company),
   ]);
 
   return { inventory, customers, invoices };
 };
 
-const getCustomerWiseSalesData = async ({ year, financialYear, search } = {}) => {
+const getCustomerWiseSalesData = async ({
+  company,
+  year,
+  financialYear,
+  search,
+} = {}) => {
   const currentFY = getCurrentFinancialYear();
   const selectedFY = financialYear
     ? parseInt(financialYear, 10)
@@ -566,6 +577,7 @@ const getCustomerWiseSalesData = async ({ year, financialYear, search } = {}) =>
   const endDate = new Date(`${selectedFY + 1}-03-31T23:59:59.999+05:30`);
 
   const matchStage = {
+    company,
     invoiceType: { $ne: "purchase" },
     status: { $in: ["paid", "pending"] },
     invoiceDate: { $gte: startDate, $lte: endDate },
@@ -614,7 +626,7 @@ const getCustomerWiseSalesData = async ({ year, financialYear, search } = {}) =>
   const aggregateResults = await Invoice.aggregate(pipeline);
 
   const fyResults = await Invoice.aggregate([
-    { $match: { invoiceType: { $ne: "purchase" }, status: { $in: ["paid", "pending"] } } },
+    { $match: { company, invoiceType: { $ne: "purchase" }, status: { $in: ["paid", "pending"] } } },
     {
       $project: {
         financialYear: {
@@ -776,7 +788,13 @@ const getCustomerWiseSalesData = async ({ year, financialYear, search } = {}) =>
   };
 };
 
-const getCustomerProductMonthlySalesData = async ({ year, financialYear, customerId, search } = {}) => {
+const getCustomerProductMonthlySalesData = async ({
+  company,
+  year,
+  financialYear,
+  customerId,
+  search,
+} = {}) => {
   const currentFY = getCurrentFinancialYear();
   const selectedFY = financialYear
     ? parseInt(financialYear, 10)
@@ -788,6 +806,7 @@ const getCustomerProductMonthlySalesData = async ({ year, financialYear, custome
   const endDate = new Date(`${selectedFY + 1}-03-31T23:59:59.999+05:30`);
 
   const matchStage = {
+    company,
     invoiceType: { $ne: "purchase" },
     status: { $in: ["paid", "pending"] },
     invoiceDate: { $gte: startDate, $lte: endDate },
@@ -843,7 +862,7 @@ const getCustomerProductMonthlySalesData = async ({ year, financialYear, custome
   const aggregateResults = await Invoice.aggregate(pipeline);
 
   const fyResults = await Invoice.aggregate([
-    { $match: { invoiceType: { $ne: "purchase" }, status: { $in: ["paid", "pending"] } } },
+    { $match: { company, invoiceType: { $ne: "purchase" }, status: { $in: ["paid", "pending"] } } },
     {
       $project: {
         financialYear: {

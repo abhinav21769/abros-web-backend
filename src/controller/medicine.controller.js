@@ -7,12 +7,13 @@ const { recordLedgerEntry } = require("../services/ledger.service");
 const createMedicine = async (req, res) => {
   try {
     const medicine = await withTransaction(async (session) => {
-      const created = new Medicine(req.body);
+      const created = new Medicine({ ...req.body, company: req.companyId });
       await created.save({ session });
 
       if (created.quantity > 0) {
         await recordLedgerEntry(
           {
+            company: req.companyId,
             medicine: created._id,
             medicineName: created.name,
             type: "opening",
@@ -62,7 +63,7 @@ const getAllMedicines = async (req, res) => {
     const ALLOWED_SORT_FIELDS = ["createdAt", "name", "quantity", "expiryDate", "mrp", "rate"];
     const safeSortBy = ALLOWED_SORT_FIELDS.includes(sortBy) ? sortBy : "createdAt";
 
-    const filter = {};
+    const filter = { company: req.companyId };
 
     // M-5 FIX: batch search and the expiry filter both used to write filter.$or,
     // so asking for both silently dropped the batch search and returned
@@ -139,7 +140,10 @@ const getAllMedicines = async (req, res) => {
 
 const getMedicineById = async (req, res) => {
   try {
-    const medicine = await Medicine.findById(req.params.id);
+    const medicine = await Medicine.findOne({
+      _id: req.params.id,
+      company: req.companyId,
+    });
 
     if (!medicine) {
       return sendError(res, {
@@ -164,7 +168,10 @@ const getMedicineById = async (req, res) => {
 const updateMedicine = async (req, res) => {
   try {
     const medicine = await withTransaction(async (session) => {
-      const existing = await Medicine.findById(req.params.id).session(session);
+      const existing = await Medicine.findOne({
+        _id: req.params.id,
+        company: req.companyId,
+      }).session(session);
 
       if (!existing) {
         return null;
@@ -188,6 +195,7 @@ const updateMedicine = async (req, res) => {
         const delta = Number(existing.quantity) - Number(oldQuantity);
         await recordLedgerEntry(
           {
+            company: req.companyId,
             medicine: existing._id,
             medicineName: existing.name,
             type: "adjustment",
@@ -230,7 +238,10 @@ const updateMedicine = async (req, res) => {
 
 const deleteMedicine = async (req, res) => {
   try {
-    const medicine = await Medicine.findByIdAndDelete(req.params.id);
+    const medicine = await Medicine.findOneAndDelete({
+      _id: req.params.id,
+      company: req.companyId,
+    });
 
     if (!medicine) {
       return sendError(res, {
@@ -263,6 +274,7 @@ const getMedicinesExpiringSoon = async (req, res) => {
     futureDate.setDate(today.getDate() + days);
 
     const medicines = await Medicine.find({
+      company: req.companyId,
       expiryDate: {
         $gte: today,
         $lte: futureDate,
@@ -288,6 +300,7 @@ const getMedicinesExpiringSoon = async (req, res) => {
 const getExpiredMedicines = async (req, res) => {
   try {
     const medicines = await Medicine.find({
+      company: req.companyId,
       expiryDate: { $lt: new Date() },
     }).sort({ expiryDate: -1 });
 
@@ -312,7 +325,7 @@ const { getInventoryStatsData } = require("../services/stats.service");
 const getInventoryStats = async (req, res) => {
   try {
     const days = parseInt(req.query.days) || 30;
-    const data = await getInventoryStatsData(days);
+    const data = await getInventoryStatsData(req.companyId, days);
 
     return sendSuccess(res, { data });
   } catch (error) {

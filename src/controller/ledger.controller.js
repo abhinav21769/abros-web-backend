@@ -14,7 +14,7 @@ const getLedgerEntries = async (req, res) => {
       search,
     } = req.query;
 
-    const filter = {};
+    const filter = { company: req.companyId };
     if (medicine) filter.medicine = medicine;
     if (type) filter.type = type;
     if (search) {
@@ -27,10 +27,14 @@ const getLedgerEntries = async (req, res) => {
 
     const skip = (page - 1) * limit;
     const sortOrder = order === "asc" ? 1 : -1;
+    // M-3 FIX: sortBy comes straight from the query string - keep it on known
+    // ledger fields so a caller cannot sort by an arbitrary path.
+    const ALLOWED_SORT_FIELDS = ["createdAt", "medicineName", "type", "quantityChange"];
+    const safeSortBy = ALLOWED_SORT_FIELDS.includes(sortBy) ? sortBy : "createdAt";
 
     const entries = await StockLedger.find(filter)
       .populate("medicine", "name batchNumber packagingType")
-      .sort({ [sortBy]: sortOrder })
+      .sort({ [safeSortBy]: sortOrder })
       .limit(parseInt(limit))
       .skip(skip);
 

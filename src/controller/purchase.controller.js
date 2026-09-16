@@ -54,12 +54,13 @@ function buildPurchaseTotals(items = []) {
 
 const createPurchase = async (req, res) => {
   try {
-    const { items, purchaseDate, ...rest } = req.body;
+    const { items, purchaseDate, company, ...rest } = req.body;
     const { items: normalizedItems, subtotal, total } = buildPurchaseTotals(items);
 
     const purchase = await withTransaction(async (session) => {
       const created = new Purchase({
         ...rest,
+        company: req.companyId,
         purchaseDate: normalizePurchaseDate(purchaseDate) || new Date(),
         items: normalizedItems,
         subtotal,
@@ -68,7 +69,7 @@ const createPurchase = async (req, res) => {
 
       await created.save({ session });
 
-      await addStockForItems(normalizedItems, session, {
+      await addStockForItems(req.companyId, normalizedItems, session, {
         type: "purchase",
         referenceType: "purchase",
         referenceId: created._id,
@@ -114,7 +115,7 @@ const getAllPurchases = async (req, res) => {
     const ALLOWED_SORT_FIELDS = ["createdAt", "purchaseDate", "total", "purchaseNumber"];
     const safeSortBy = ALLOWED_SORT_FIELDS.includes(sortBy) ? sortBy : "createdAt";
 
-    const filter = {};
+    const filter = { company: req.companyId };
     if (purchaseNumber) {
       filter.purchaseNumber = { $regex: purchaseNumber, $options: "i" };
     }
@@ -156,10 +157,10 @@ const getAllPurchases = async (req, res) => {
 
 const getPurchaseById = async (req, res) => {
   try {
-    const purchase = await Purchase.findById(req.params.id).populate(
-      "items.medicine",
-      "name batchNumber packagingType hsn gstRate",
-    );
+    const purchase = await Purchase.findOne({
+      _id: req.params.id,
+      company: req.companyId,
+    }).populate("items.medicine", "name batchNumber packagingType hsn gstRate");
 
     if (!purchase) {
       return sendError(res, {
@@ -194,6 +195,7 @@ const generatePurchaseNumber = async (req, res) => {
     const escapeRegex = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
     const existingPurchases = await Purchase.find({
+      company: req.companyId,
       purchaseNumber: {
         $regex: `^${escapeRegex(prefix)}`,
         $options: "i",
@@ -215,11 +217,14 @@ const generatePurchaseNumber = async (req, res) => {
     let nextNum = maxNum + 1;
     let purchaseNumber = `${prefix}${String(nextNum).padStart(2, "0")}`;
 
-    let exists = await Purchase.exists({ purchaseNumber });
+    const numberTaken = (value) =>
+      Purchase.exists({ company: req.companyId, purchaseNumber: value });
+
+    let exists = await numberTaken(purchaseNumber);
     while (exists) {
       nextNum += 1;
       purchaseNumber = `${prefix}${String(nextNum).padStart(2, "0")}`;
-      exists = await Purchase.exists({ purchaseNumber });
+      exists = await numberTaken(purchaseNumber);
     }
 
     return sendSuccess(res, {

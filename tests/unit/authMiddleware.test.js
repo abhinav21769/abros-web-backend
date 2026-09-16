@@ -1,5 +1,6 @@
 const jwt = require("jsonwebtoken");
 const User = require("../../src/models/user.model");
+const Company = require("../../src/models/company.model");
 const { authenticate, requireAdminSecret } = require("../../src/middleware/auth.middleware");
 
 describe("Auth Middleware", () => {
@@ -52,7 +53,9 @@ describe("Auth Middleware", () => {
     });
 
     test("returns 401 if user is inactive", async () => {
+      const company = await Company.create({ name: "Test Pharma" });
       const user = await User.create({
+        company: company._id,
         username: "inactiveuser",
         password: "password123",
         name: "Inactive User",
@@ -68,7 +71,9 @@ describe("Auth Middleware", () => {
     });
 
     test("attaches user to req and calls next() on valid token", async () => {
+      const company = await Company.create({ name: "Test Pharma" });
       const user = await User.create({
+        company: company._id,
         username: "activeuser",
         password: "password123",
         name: "Active User",
@@ -82,6 +87,27 @@ describe("Auth Middleware", () => {
       expect(nextFn).toHaveBeenCalled();
       expect(mockReq.user).toBeDefined();
       expect(mockReq.user.username).toBe("activeuser");
+      expect(String(mockReq.companyId)).toBe(String(company._id));
+    });
+
+    test("returns 401 when the user's company is deactivated", async () => {
+      const company = await Company.create({
+        name: "Closed Pharma",
+        isActive: false,
+      });
+      const user = await User.create({
+        company: company._id,
+        username: "orphaneduser",
+        password: "password123",
+        isActive: true,
+      });
+
+      const token = jwt.sign({ userId: user._id }, process.env.JWT_SECRET);
+      mockReq.headers.authorization = `Bearer ${token}`;
+
+      await authenticate(mockReq, mockRes, nextFn);
+      expect(mockRes.status).toHaveBeenCalledWith(401);
+      expect(nextFn).not.toHaveBeenCalled();
     });
   });
 

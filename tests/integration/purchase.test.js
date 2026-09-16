@@ -7,10 +7,12 @@ const { createTestUser, createTestMedicine } = require("./helpers");
 describe("Purchase API Endpoints", () => {
   let authToken;
   let medicine;
+  let company;
 
   beforeEach(async () => {
-    const { token } = await createTestUser();
+    const { token, company: testCompany } = await createTestUser();
     authToken = token;
+    company = testCompany;
 
     medicine = await createTestMedicine({
       batches: [
@@ -61,6 +63,7 @@ describe("Purchase API Endpoints", () => {
 
     test("fails when duplicate purchase number is supplied", async () => {
       await Purchase.create({
+        company: company._id,
         purchaseNumber: "PUR-DUPLICATE",
         purchaseDate: new Date(),
         items: [

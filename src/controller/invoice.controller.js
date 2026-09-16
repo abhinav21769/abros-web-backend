@@ -87,7 +87,30 @@ const assertInvoiceNumberUnchanged = (body, existing) => {
 
 const createInvoice = async (req, res) => {
   try {
-    const invoice = await createInvoiceRecord(req.body);
+    // company is never taken from the body - a caller cannot file an invoice
+    // into someone else's books.
+    const { company, ...body } = req.body || {};
+
+    if (normalizeInvoiceType(body.invoiceType) === "sale" && body.customer) {
+      const customerExists = await Customer.exists({
+        _id: body.customer,
+        company: req.companyId,
+      });
+
+      if (!customerExists) {
+        return sendError(res, {
+          message: ERRORS.notFound.customer,
+          code: ERROR_CODES.NOT_FOUND,
+          errorMessage: ERRORS.notFound.customer,
+          statusCode: 404,
+        });
+      }
+    }
+
+    const invoice = await createInvoiceRecord({
+      ...body,
+      company: req.companyId,
+    });
 
     return sendSuccess(res, {
       message: SUCCESS.invoice.created,
@@ -127,7 +150,7 @@ const getAllInvoices = async (req, res) => {
     const ALLOWED_SORT_FIELDS = ["createdAt", "invoiceDate", "total", "invoiceNumber", "status"];
     const safeSortBy = ALLOWED_SORT_FIELDS.includes(sortBy) ? sortBy : "createdAt";
 
-    const filter = {};
+    const filter = { company: req.companyId };
 
     if (status) filter.status = status;
     if (invoiceType) {
@@ -143,6 +166,7 @@ const getAllInvoices = async (req, res) => {
     const searchTerm = (search || invoiceNumber || "").trim();
     if (searchTerm) {
       const matchingCustomers = await Customer.find({
+        company: req.companyId,
         $or: [
           { name: { $regex: searchTerm, $options: "i" } },
           { contact: { $regex: searchTerm, $options: "i" } },
@@ -192,7 +216,10 @@ const getAllInvoices = async (req, res) => {
 
 const getInvoiceById = async (req, res) => {
   try {
-    const invoice = await Invoice.findById(req.params.id)
+    const invoice = await Invoice.findOne({
+      _id: req.params.id,
+      company: req.companyId,
+    })
       .populate("customer", "name address contact gstin dlNo")
       .populate("items.medicine", MEDICINE_POPULATE_FIELDS);
 
@@ -222,7 +249,10 @@ const updateInvoice = async (req, res) => {
     const totals = body.items ? buildInvoiceTotals(body.items) : null;
 
     const invoice = await withTransaction(async (session) => {
-      const existing = await Invoice.findById(req.params.id).session(session);
+      const existing = await Invoice.findOne({
+        _id: req.params.id,
+        company: req.companyId,
+      }).session(session);
 
       if (!existing) {
         return null;
@@ -234,6 +264,18 @@ const updateInvoice = async (req, res) => {
         body,
         existing.invoiceType || "sale",
       );
+
+      // Re-pointing a bill at another tenant's customer is not a valid edit.
+      if (updateData.customer) {
+        const customerExists = await Customer.exists({
+          _id: updateData.customer,
+          company: req.companyId,
+        });
+
+        if (!customerExists) {
+          throw new ImmutableFieldError(ERRORS.notFound.customer);
+        }
+      }
 
       if (updateData.invoiceDate) {
         updateData.invoiceDate = normalizeInvoiceDate(updateData.invoiceDate);
@@ -267,6 +309,7 @@ const updateInvoice = async (req, res) => {
       const newItems = totals ? totals.items : oldItems;
 
       await syncInvoiceStockChanges(
+        req.companyId,
         oldItems,
         oldStatus,
         newItems,
@@ -290,11 +333,15 @@ const updateInvoice = async (req, res) => {
         return existing;
       }
 
-      return Invoice.findByIdAndUpdate(req.params.id, updateData, {
-        new: true,
-        runValidators: true,
-        session,
-      });
+      return Invoice.findOneAndUpdate(
+        { _id: req.params.id, company: req.companyId },
+        updateData,
+        {
+          new: true,
+          runValidators: true,
+          session,
+        },
+      );
     });
 
     if (!invoice) {
@@ -336,7 +383,10 @@ const updateInvoice = async (req, res) => {
 const deleteInvoice = async (req, res) => {
   try {
     const invoice = await withTransaction(async (session) => {
-      const existing = await Invoice.findById(req.params.id).session(session);
+      const existing = await Invoice.findOne({
+        _id: req.params.id,
+        company: req.companyId,
+      }).session(session);
 
       if (!existing) {
         return null;
@@ -353,12 +403,12 @@ const deleteInvoice = async (req, res) => {
         };
 
         if ((existing.invoiceType || "sale") === "purchase") {
-          await deductStockForItems(existing.items, session, {
+          await deductStockForItems(req.companyId, existing.items, session, {
             type: "purchase",
             ...ledgerMeta,
           });
         } else {
-          await restoreStockForItems(existing.items, session, {
+          await restoreStockForItems(req.companyId, existing.items, session, {
             type: "sale",
             ...ledgerMeta,
           });
@@ -400,7 +450,7 @@ const { getInvoiceStatsData } = require("../services/stats.service");
 
 const getInvoiceStats = async (req, res) => {
   try {
-    const data = await getInvoiceStatsData();
+    const data = await getInvoiceStatsData(req.companyId);
 
     return sendSuccess(res, { data });
   } catch (error) {
@@ -415,7 +465,10 @@ const getInvoiceStats = async (req, res) => {
 const generateInvoiceNumber = async (req, res) => {
   try {
     const invoiceType = normalizeInvoiceType(req.query.invoiceType);
-    const invoiceNumber = await generateInvoiceNumberValue(invoiceType);
+    const invoiceNumber = await generateInvoiceNumberValue(
+      req.companyId,
+      invoiceType,
+    );
 
     return sendSuccess(res, {
       data: {

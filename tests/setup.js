@@ -25,6 +25,10 @@ beforeAll(async () => {
 });
 
 afterEach(async () => {
+  // The auth middleware caches users for five minutes; tests reuse ids and
+  // roles freely, so the cache is dropped along with the data.
+  require("../src/middleware/auth.middleware").invalidateUserCache();
+
   if (mongoose.connection.readyState === 1) {
     const collections = mongoose.connection.collections;
     for (const key in collections) {

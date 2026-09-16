@@ -39,6 +39,12 @@ const batchSchema = new mongoose.Schema(
 
 const medicineSchema = new mongoose.Schema(
   {
+    company: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Company",
+      required: [true, "Company is required"],
+      index: true,
+    },
     name: {
       type: String,
       required: [true, "Medicine name is required"],
@@ -145,10 +151,10 @@ medicineSchema.pre("save", function (next) {
 });
 
 // Indexes for efficient batch querying
-medicineSchema.index({ name: 1 });
-medicineSchema.index({ "batches.expiryDate": 1 });
-medicineSchema.index({ "batches.batchNumber": 1 });
-medicineSchema.index({ quantity: 1 });
+medicineSchema.index({ company: 1, name: 1 });
+medicineSchema.index({ company: 1, "batches.expiryDate": 1 });
+medicineSchema.index({ company: 1, "batches.batchNumber": 1 });
+medicineSchema.index({ company: 1, quantity: 1 });
 
 // Virtual for checking if medicine has any expired batches
 medicineSchema.virtual("isExpired").get(function () {

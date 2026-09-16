@@ -1,4 +1,5 @@
 const Invoice = require("../models/invoice.model");
+const Company = require("../models/company.model");
 const { buildInvoiceTotals } = require("../utils/invoiceTax");
 const {
   addStockForItems,
@@ -32,7 +33,20 @@ const normalizeInvoiceDate = (value) => {
 const normalizeInvoiceType = (value) =>
   value === "purchase" ? "purchase" : "sale";
 
-const generateInvoiceNumberValue = async (invoiceType = "sale") => {
+// Each company runs its own series under its own prefix, so the scan and the
+// uniqueness check are both company-scoped.
+const getCompanyPrefixes = async (companyId) => {
+  const company = await Company.findById(companyId)
+    .select("invoicePrefix purchasePrefix")
+    .lean();
+
+  return {
+    sale: (company?.invoicePrefix || "INV").toUpperCase(),
+    purchase: (company?.purchasePrefix || "PO").toUpperCase(),
+  };
+};
+
+const generateInvoiceNumberValue = async (companyId, invoiceType = "sale") => {
   const type = normalizeInvoiceType(invoiceType);
   const year = Number(
     new Intl.DateTimeFormat("en-CA", {
@@ -42,18 +56,23 @@ const generateInvoiceNumberValue = async (invoiceType = "sale") => {
   );
   const fullYear = String(year);
   const isPurchase = type === "purchase";
-  const prefix = isPurchase ? `PO-${fullYear}-` : `AH-${fullYear}-`;
+  const prefixes = await getCompanyPrefixes(companyId);
+  const base = isPurchase ? prefixes.purchase : prefixes.sale;
+  const prefix = `${base}-${fullYear}-`;
 
+  // Older bills were numbered with a two-digit year (and, for purchases, a few
+  // other spellings). They still count towards the series.
   const legacyPrefixes = isPurchase
     ? [
         prefix,
-        `PO-${String(year).slice(-2)}-`,
+        `${base}-${String(year).slice(-2)}-`,
         `PUR-${String(year).slice(-2)}-`,
         `PAH-${String(year).slice(-2)}-`,
       ]
-    : [prefix, `AH-${String(year).slice(-2)}-`];
+    : [prefix, `${base}-${String(year).slice(-2)}-`];
 
   const query = {
+    company: companyId,
     invoiceType: isPurchase ? "purchase" : { $in: ["sale", null] },
     // A cancelled bill does not advance the series. Cancelling removes the
     // record outright, so this only guards rows cancelled before that change.
@@ -83,9 +102,10 @@ const generateInvoiceNumberValue = async (invoiceType = "sale") => {
   let nextNum = maxNum + 1;
   let candidate = `${prefix}${String(nextNum).padStart(3, "0")}`;
 
-  // invoiceNumber is unique across the collection, so the candidate is checked
-  // against every stored invoice - including any legacy cancelled one.
-  const numberTaken = (value) => Invoice.exists({ invoiceNumber: value });
+  // invoiceNumber is unique per company, so the candidate is checked against
+  // every invoice this company stored - including any legacy cancelled one.
+  const numberTaken = (value) =>
+    Invoice.exists({ company: companyId, invoiceNumber: value });
 
   let exists = await numberTaken(candidate);
   while (exists) {
@@ -104,21 +124,26 @@ const populateInvoice = async (invoice) => {
 };
 
 const createInvoiceRecord = async (payload) => {
-  const { items, invoiceDate, invoiceType, ...rest } = payload;
+  const { items, invoiceDate, invoiceType, company, ...rest } = payload;
   const type = normalizeInvoiceType(invoiceType);
+
+  if (!company) {
+    throw new Error("createInvoiceRecord requires a company");
+  }
   const { items: normalizedItems, subtotal, total } = buildInvoiceTotals(items);
   const status =
     rest.paymentType === "cash" && rest.status !== "cancelled"
       ? "paid"
       : rest.status || "pending";
   const invoiceNumber =
-    rest.invoiceNumber || (await generateInvoiceNumberValue(type));
+    rest.invoiceNumber || (await generateInvoiceNumberValue(company, type));
 
   const paidAt = status === "paid" ? (rest.paidAt || new Date()) : undefined;
 
   const invoice = await withTransaction(async (session) => {
     const created = new Invoice({
       ...rest,
+      company,
       invoiceNumber,
       invoiceType: type,
       status,
@@ -137,12 +162,12 @@ const createInvoiceRecord = async (payload) => {
       };
 
       if (type === "purchase") {
-        await addStockForItems(normalizedItems, session, {
+        await addStockForItems(company, normalizedItems, session, {
           type: "purchase",
           ...ledgerMeta,
         });
       } else {
-        await deductStockForItems(normalizedItems, session, {
+        await deductStockForItems(company, normalizedItems, session, {
           type: "sale",
           ...ledgerMeta,
         });

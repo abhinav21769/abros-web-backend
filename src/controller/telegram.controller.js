@@ -1,15 +1,22 @@
 const { ERROR_CODES, sendSuccess, sendError } = require("../utils/response");
+const Company = require("../models/company.model");
 const {
   isConfigured,
   processTelegramUpdate,
 } = require("../services/telegramBot.service");
 
 const getTelegramStatus = async (req, res) => {
+  // Access is per company now: a chat can bill only if some company lists it,
+  // so the useful signal is how many companies have linked a chat.
+  const linkedCompanies = await Company.countDocuments({
+    telegramChatId: { $exists: true, $type: "string", $gt: "" },
+  });
+
   return sendSuccess(res, {
     data: {
       configured: isConfigured(),
       polling: process.env.TELEGRAM_ENABLE_POLLING === "true",
-      ownerChatIdSet: Boolean(process.env.TELEGRAM_OWNER_CHAT_ID),
+      linkedCompanies,
     },
   });
 };

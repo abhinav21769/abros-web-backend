@@ -3,25 +3,45 @@ const autoTableImport = require("jspdf-autotable");
 const autoTable = autoTableImport.default || autoTableImport;
 const QRCode = require("qrcode");
 
-const SELLER = {
-  name: "ABROS HEALTHCARE",
-  addressLine: "Shop-2, Shivpuri Colony, Sultanpur, Ambala City.",
-  pincode: "134003",
-  phone: "8295566445",
-  phoneDisplay: "82955-66445",
-  gstin: "06AFUPJ3372H1Z5",
-  dlNumbers: ["WLF20B2026HR000446", "WLF21B2026HR000442"],
-  bankName: "Punjab National Bank, Prem Nagar",
-  ifsc: "PUNB0120310",
-  account: "10401132000162",
-  forLabel: "For ABROS HEALTHCARE",
-  vpa: "8295566445@paytm",
-};
-
-const TERMS = [
-  "1. All disputes Subject to Ambala Jurisdiction only.",
-  "2. Goods once sold will not taken back or Exchanged.",
+const DEFAULT_TERMS = [
+  "1. Goods once sold will not be taken back or exchanged.",
 ];
+
+// The seller block used to be a hardcoded constant. It now comes from the
+// company the invoice belongs to, so each tenant's bills carry their own
+// letterhead, GSTIN, drug licences, bank details and UPI id.
+function buildSeller(company) {
+  const source = company || {};
+  const name = String(source.name || "").toUpperCase();
+  const addressLine = [
+    source.addressLine,
+    source.city,
+    source.state,
+    source.pincode,
+  ]
+    .map((part) => String(part || "").trim())
+    .filter(Boolean)
+    .join(", ");
+
+  return {
+    name,
+    addressLine,
+    phoneDisplay: source.phone || "",
+    gstin: source.gstin || "",
+    dlNumbers: (source.dlNumbers || []).filter(Boolean),
+    bankName: source.bank?.name || "",
+    ifsc: source.bank?.ifsc || "",
+    account: source.bank?.accountNumber || "",
+    forLabel: name ? `For ${name}` : "",
+    vpa: source.upiVpa || "",
+    // jsPDF can place PNG/JPEG data URIs directly; SVG it cannot, so it is
+    // dropped rather than crashing the whole bill.
+    logo: /^data:image\/(png|jpe?g)/i.test(source.logo || "") ? source.logo : null,
+    terms: (source.terms || []).filter(Boolean).length
+      ? source.terms.filter(Boolean)
+      : DEFAULT_TERMS,
+  };
+}
 
 function formatAmount(value) {
   return Number(value || 0).toFixed(2);
@@ -243,7 +263,16 @@ function drawCutLine(doc, pageWidth, y, margin) {
 }
 
 function drawInvoiceCopy(doc, invoice, options) {
-  const { startY, margin, contentWidth, pageWidth, copyLabel, maxEndY, qrDataUrl } = options;
+  const {
+    startY,
+    margin,
+    contentWidth,
+    pageWidth,
+    copyLabel,
+    maxEndY,
+    qrDataUrl,
+    seller,
+  } = options;
   const customer = invoice.customer || {};
   const isPurchase = invoice.invoiceType === "purchase";
   const receiver = isPurchase
@@ -268,11 +297,15 @@ function drawInvoiceCopy(doc, invoice, options) {
 
   doc.setFont("helvetica", "bold");
   doc.setFontSize(7);
-  doc.text(`GSTIN: ${SELLER.gstin}`, margin, y + 3);
+  if (seller.gstin) {
+    doc.text(`GSTIN: ${seller.gstin}`, margin, y + 3);
+  }
   const dlLabel = "D.L NO: - ";
-  doc.text(`${dlLabel}${SELLER.dlNumbers[0] || ""}`, margin, y + 7);
-  if (SELLER.dlNumbers[1]) {
-    doc.text(SELLER.dlNumbers[1], margin + doc.getTextWidth(dlLabel), y + 11);
+  if (seller.dlNumbers[0]) {
+    doc.text(`${dlLabel}${seller.dlNumbers[0]}`, margin, y + 7);
+  }
+  if (seller.dlNumbers[1]) {
+    doc.text(seller.dlNumbers[1], margin + doc.getTextWidth(dlLabel), y + 11);
   }
 
   doc.setFont("helvetica", "normal");
@@ -289,15 +322,32 @@ function drawInvoiceCopy(doc, invoice, options) {
   doc.setFont("helvetica", "bold");
   doc.text(invoice.paymentType === "cash" ? "CASH" : "CREDIT", metaX + 18, y + 10);
 
-  y += SELLER.dlNumbers[1] ? 22 : 18;
+  y += seller.dlNumbers[1] ? 22 : 18;
+
+  // The company logo sits to the left of the name when one was uploaded.
+  if (seller.logo) {
+    try {
+      const logoSize = 12;
+      doc.addImage(seller.logo, margin, y - 9, logoSize, logoSize);
+    } catch (e) {
+      // A logo that jsPDF cannot decode must never stop the invoice printing.
+    }
+  }
+
   doc.setFont("helvetica", "bold");
   doc.setFontSize(13);
-  doc.text(SELLER.name, pageWidth / 2, y, { align: "center" });
+  doc.text(seller.name, pageWidth / 2, y, { align: "center" });
 
   y += 5;
   doc.setFont("helvetica", "normal");
   doc.setFontSize(8);
-  doc.text(`${SELLER.addressLine} Phone No.: ${SELLER.phoneDisplay}`, pageWidth / 2, y, { align: "center" });
+  const sellerContactLine = [
+    seller.addressLine,
+    seller.phoneDisplay ? `Phone No.: ${seller.phoneDisplay}` : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
+  doc.text(sellerContactLine, pageWidth / 2, y, { align: "center" });
 
   y += 5;
   const receiverHeaderHeight = 5;
@@ -409,9 +459,9 @@ function drawInvoiceCopy(doc, invoice, options) {
     doc.text("Bank Details:", margin + 2, blockY + 3);
     doc.setFont("helvetica", "normal");
     doc.setFontSize(6.8);
-    doc.text(SELLER.bankName, margin + 2, blockY + 6.5);
-    doc.text(`ACCOUNT : ${SELLER.account}`, margin + 2, blockY + 9.5);
-    doc.text(`IFSC : ${SELLER.ifsc}`, margin + 2, blockY + 12.5, { maxWidth: contentWidth * 0.42 });
+    doc.text(seller.bankName, margin + 2, blockY + 6.5);
+    doc.text(`ACCOUNT : ${seller.account}`, margin + 2, blockY + 9.5);
+    doc.text(`IFSC : ${seller.ifsc}`, margin + 2, blockY + 12.5, { maxWidth: contentWidth * 0.42 });
 
     if (qrDataUrl) {
       const qrX = (pageWidth - qrSize) / 2;
@@ -431,26 +481,30 @@ function drawInvoiceCopy(doc, invoice, options) {
     doc.text("Terms & Conditions", margin + 2, signatureTop + 2);
     doc.setFont("helvetica", "normal");
     doc.setFontSize(6);
-    TERMS.forEach((term, index) => {
+    seller.terms.forEach((term, index) => {
       doc.text(term, margin + 2, signatureTop + 5 + index * 3.2, { maxWidth: contentWidth * 0.52 });
     });
   }
 
   doc.setFont("helvetica", "bold");
   doc.setFontSize(7);
-  doc.text(SELLER.forLabel, pageWidth - margin, signatureTop + 2, { align: "right" });
+  doc.text(seller.forLabel, pageWidth - margin, signatureTop + 2, { align: "right" });
   doc.setFont("helvetica", "normal");
   doc.text("Authorised Signatory", pageWidth - margin, signatureTop + 6, { align: "right" });
 
   return Math.max(blockY, signatureTop + 8);
 }
 
-async function generateUpiQrDataUrl(amount, note) {
-  const upiUrl = `upi://pay?pa=${encodeURIComponent(SELLER.vpa)}&pn=${encodeURIComponent(SELLER.name)}&am=${encodeURIComponent(amount)}&cu=INR&tn=${encodeURIComponent(note)}`;
+async function generateUpiQrDataUrl(seller, amount, note) {
+  const upiUrl = `upi://pay?pa=${encodeURIComponent(seller.vpa)}&pn=${encodeURIComponent(seller.name)}&am=${encodeURIComponent(amount)}&cu=INR&tn=${encodeURIComponent(note)}`;
   return QRCode.toDataURL(upiUrl, { width: 300, margin: 1 });
 }
 
-async function buildFullInvoicePdfBuffer(invoice) {
+async function buildFullInvoicePdfBuffer(invoice, company) {
+  // invoice.company is populated on some paths; an explicit company always wins.
+  const seller = buildSeller(
+    company || (invoice.company && typeof invoice.company === "object" ? invoice.company : null),
+  );
   const doc = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4" });
   const pageWidth = doc.internal.pageSize.getWidth();
   const pageHeight = doc.internal.pageSize.getHeight();
@@ -462,9 +516,10 @@ async function buildFullInvoicePdfBuffer(invoice) {
   const isPurchase = invoice.invoiceType === "purchase";
   let qrDataUrl = null;
 
-  if (!isPurchase && invoice.status !== "cancelled") {
+  // No UPI id on the company profile means no QR - never someone else's.
+  if (!isPurchase && invoice.status !== "cancelled" && seller.vpa) {
     try {
-      qrDataUrl = await generateUpiQrDataUrl(tax.grandTotal, `Invoice ${invoice.invoiceNumber}`);
+      qrDataUrl = await generateUpiQrDataUrl(seller, tax.grandTotal, `Invoice ${invoice.invoiceNumber}`);
     } catch (e) {
       // Skip QR if generation fails
     }
@@ -478,6 +533,7 @@ async function buildFullInvoicePdfBuffer(invoice) {
     copyLabel: "CUSTOMER COPY",
     maxEndY: cutY - copyGap,
     qrDataUrl,
+    seller,
   });
 
   drawCutLine(doc, pageWidth, cutY, margin);
@@ -490,10 +546,11 @@ async function buildFullInvoicePdfBuffer(invoice) {
     copyLabel: "OFFICE COPY",
     maxEndY: pageHeight - margin,
     qrDataUrl,
+    seller,
   });
 
   const arrayBuffer = doc.output("arraybuffer");
   return Buffer.from(arrayBuffer);
 }
 
-module.exports = { buildInvoicePdf: buildFullInvoicePdfBuffer };
+module.exports = { buildInvoicePdf: buildFullInvoicePdfBuffer, buildSeller };
