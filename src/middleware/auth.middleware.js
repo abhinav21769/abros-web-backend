@@ -141,6 +141,23 @@ const invalidateUserCache = (userId) => {
   userCache.delete(String(userId));
 };
 
+// The cached user carries a populated company, so a profile change has to drop
+// every cached user of that company. Without this, finishing onboarding leaves
+// /api/auth/me reporting the old company for up to the cache TTL - and the app
+// sends the admin straight back into the setup wizard on their next reload.
+const invalidateCompanyCache = (companyId) => {
+  if (companyId == null) return;
+  const target = String(companyId);
+
+  for (const [key, entry] of userCache.entries()) {
+    const company = entry.user?.company;
+    const cachedId = company?._id ?? company;
+    if (cachedId && String(cachedId) === target) {
+      userCache.delete(key);
+    }
+  }
+};
+
 module.exports = {
   authenticate,
   requireAdminSecret,
@@ -148,4 +165,5 @@ module.exports = {
   requireAdmin,
   denyWritesForViewers,
   invalidateUserCache,
+  invalidateCompanyCache,
 };

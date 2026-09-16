@@ -64,6 +64,34 @@ describe("Company profile and onboarding", () => {
     expect(inDb.onboardingCompletedAt).toBeInstanceOf(Date);
   });
 
+  test("a reload right after onboarding does not land back in the wizard", async () => {
+    // Warm the request cache so the stale copy is the one under test.
+    const before = await request(app).get("/api/auth/me").set(authed());
+    expect(before.body.data.company.onboardingCompleted).toBe(false);
+
+    await request(app)
+      .post("/api/company/onboarding")
+      .set(authed())
+      .send({ name: "Fresh Pharma Pvt Ltd" });
+
+    const after = await request(app).get("/api/auth/me").set(authed());
+    expect(after.body.data.company.onboardingCompleted).toBe(true);
+    expect(after.body.data.company.name).toBe("Fresh Pharma Pvt Ltd");
+  });
+
+  test("a saved logo and name reach /api/auth/me straight away", async () => {
+    await request(app).get("/api/auth/me").set(authed());
+
+    await request(app)
+      .put("/api/company")
+      .set(authed())
+      .send({ name: "Renamed Pharma", logo: ONE_PIXEL_PNG });
+
+    const me = await request(app).get("/api/auth/me").set(authed());
+    expect(me.body.data.company.name).toBe("Renamed Pharma");
+    expect(me.body.data.company.logo).toBe(ONE_PIXEL_PNG);
+  });
+
   test("the invoice series uses the company's own prefix", async () => {
     await request(app)
       .put("/api/company")

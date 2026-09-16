@@ -2,6 +2,7 @@ const Company = require("../models/company.model");
 const { ERROR_CODES, sendSuccess, sendError } = require("../utils/response");
 const { SUCCESS, ERRORS, getUserMessage } = require("../utils/messages");
 const { toCompanyProfile } = require("../utils/serializers");
+const { invalidateCompanyCache } = require("../middleware/auth.middleware");
 const logger = require("../utils/logger");
 
 // Only these may be written from the app. Anything else on the document
@@ -110,6 +111,10 @@ const saveCompany = async (req, res, { completeOnboarding }) => {
     }
 
     await company.save();
+    // Every request caches the user together with their company, so the saved
+    // profile has to invalidate those entries or the app keeps serving the old
+    // name, logo and onboarding flag until the TTL runs out.
+    invalidateCompanyCache(company._id);
 
     return sendSuccess(res, {
       message: completeOnboarding
