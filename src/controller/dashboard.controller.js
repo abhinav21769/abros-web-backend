@@ -5,11 +5,12 @@ const {
   getProductWiseMonthlySalesData,
   getCustomerWiseSalesData,
   getCustomerProductMonthlySalesData,
+  EXPIRING_SOON_DAYS,
 } = require("../services/stats.service");
 
 const getDashboardStats = async (req, res) => {
   try {
-    const days = parseInt(req.query.days) || 30;
+    const days = parseInt(req.query.days) || EXPIRING_SOON_DAYS;
     const data = await getDashboardStatsData(days);
 
     return sendSuccess(res, { data });
