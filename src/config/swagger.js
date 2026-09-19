@@ -80,7 +80,7 @@ const swaggerDocument = {
           {
             name: "days",
             in: "query",
-            schema: { type: "integer", default: 30 },
+            schema: { type: "integer", default: 180 },
             description: "Days window for expiring-soon count",
           },
         ],
@@ -95,7 +95,7 @@ const swaggerDocument = {
           {
             name: "days",
             in: "query",
-            schema: { type: "integer", default: 30 },
+            schema: { type: "integer", default: 180 },
           },
         ],
         responses: { 200: { description: "Expiring medicines list" } },

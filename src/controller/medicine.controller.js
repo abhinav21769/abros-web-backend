@@ -268,7 +268,7 @@ const deleteMedicine = async (req, res) => {
 
 const getMedicinesExpiringSoon = async (req, res) => {
   try {
-    const days = parseInt(req.query.days) || 30;
+    const days = parseInt(req.query.days) || EXPIRING_SOON_DAYS;
     const today = new Date();
     const futureDate = new Date();
     futureDate.setDate(today.getDate() + days);
@@ -320,11 +320,14 @@ const getExpiredMedicines = async (req, res) => {
   }
 };
 
-const { getInventoryStatsData } = require("../services/stats.service");
+const {
+  getInventoryStatsData,
+  EXPIRING_SOON_DAYS,
+} = require("../services/stats.service");
 
 const getInventoryStats = async (req, res) => {
   try {
-    const days = parseInt(req.query.days) || 30;
+    const days = parseInt(req.query.days) || EXPIRING_SOON_DAYS;
     const data = await getInventoryStatsData(req.companyId, days);
 
     return sendSuccess(res, { data });

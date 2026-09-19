@@ -7,7 +7,10 @@ const { getFinancialYearStart } = require("../utils/quarterUtils");
 const facetCount = (arr) => arr[0]?.count ?? 0;
 const facetSum = (arr) => arr[0]?.total ?? 0;
 
-const getInventoryStatsData = async (company, days = 30) => {
+const EXPIRING_SOON_DAYS = 180;
+const LOW_STOCK_THRESHOLD = 200;
+
+const getInventoryStatsData = async (company, days = EXPIRING_SOON_DAYS) => {
   const today = new Date();
   const futureDate = new Date();
   futureDate.setDate(today.getDate() + days);
@@ -41,7 +44,7 @@ const getInventoryStatsData = async (company, days = 30) => {
     const medTotalQty = batches.reduce((sum, b) => sum + (Number(b.quantity) || 0), 0);
     totalQuantity += medTotalQty;
 
-    if (medTotalQty < 10) {
+    if (medTotalQty < LOW_STOCK_THRESHOLD) {
       lowStockCount += 1;
     }
 
@@ -99,6 +102,7 @@ const getInventoryStatsData = async (company, days = 30) => {
       expiringStock: expiringStockCount,
       expiringWithinDays: days,
       lowStockCount,
+      lowStockThreshold: LOW_STOCK_THRESHOLD,
       totalQuantity,
       totalInventoryValue: Math.round(totalInventoryValue * 100) / 100,
     },
@@ -550,7 +554,7 @@ const getProductWiseMonthlySalesData = async ({
   };
 };
 
-const getDashboardStatsData = async (company, days = 30) => {
+const getDashboardStatsData = async (company, days = EXPIRING_SOON_DAYS) => {
   const [inventory, customers, invoices] = await Promise.all([
     getInventoryStatsData(company, days),
     getCustomerStatsData(company),
@@ -1082,6 +1086,8 @@ const getCustomerProductMonthlySalesData = async ({
 };
 
 module.exports = {
+  EXPIRING_SOON_DAYS,
+  LOW_STOCK_THRESHOLD,
   getInventoryStatsData,
   getCustomerStatsData,
   getInvoiceStatsData,
