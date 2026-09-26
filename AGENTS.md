@@ -14,9 +14,7 @@ npm run dev
 |---------|-------------|
 | `npm run dev` | Start dev server with nodemon (NODE_ENV=development) |
 | `npm start` | Start production server (NODE_ENV=production) |
-| `npm run create-company` | Create a tenant and its first admin via CLI |
-| `npm run create-user` | Add a user to an existing company via CLI |
-| `npm run reset-database` | DESTRUCTIVE: drop every collection (needs `--yes`) |
+| `npm run create-user` | Create admin user via CLI |
 | `npm run migrate-batches` | Run batch migration script |
 
 ## Environment Variables
@@ -26,7 +24,7 @@ Critical (server exits if missing):
 - `JWT_SECRET` - Token signing secret
 
 Optional but required for features:
-- `TELEGRAM_BOT_TOKEN`, `TELEGRAM_ENABLE_POLLING`, `TELEGRAM_WEBHOOK_SECRET` (which company a chat bills for is set on the company profile, not in env)
+- `TELEGRAM_BOT_TOKEN`, `TELEGRAM_OWNER_CHAT_ID`, `TELEGRAM_ENABLE_POLLING`, `TELEGRAM_WEBHOOK_SECRET`
 - `GEMINI_API_KEY`, `GEMINI_MODEL`
 - `ADMIN_SECRET` - Header secret for API user creation
 - `CORS_ALLOWED_ORIGINS` - Comma-separated origins (default: localhost:5173, localhost:4173, production frontend)

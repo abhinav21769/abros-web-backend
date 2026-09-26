@@ -2,16 +2,11 @@ const mongoose = require("mongoose");
 
 const customerSchema = new mongoose.Schema(
   {
-    company: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "Company",
-      required: [true, "Company is required"],
-      index: true,
-    },
     name: {
       type: String,
       required: [true, "Customer name is required"],
       trim: true,
+      index: true,
     },
     address: {
       type: String,
@@ -39,12 +34,9 @@ const customerSchema = new mongoose.Schema(
   },
 );
 
-// Every index is company-scoped: two tenants may hold the same GSTIN or drug
-// licence number, they just may not hold it twice within one company.
-customerSchema.index({ company: 1, name: 1 });
-customerSchema.index({ company: 1, name: 1, contact: 1 });
+customerSchema.index({ name: 1, contact: 1 });
 customerSchema.index(
-  { company: 1, gstin: 1 },
+  { gstin: 1 },
   {
     unique: true,
     partialFilterExpression: {
@@ -53,7 +45,7 @@ customerSchema.index(
   },
 );
 customerSchema.index(
-  { company: 1, dlNo: 1 },
+  { dlNo: 1 },
   {
     unique: true,
     partialFilterExpression: {

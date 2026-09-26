@@ -20,20 +20,11 @@ const SUCCESS = {
   auth: {
     login: "Signed in successfully.",
     userCreated: "User created successfully.",
-    userUpdated: "User details saved.",
-    userDeleted: "User removed successfully.",
-    passwordChanged: "Password updated successfully.",
-  },
-  company: {
-    created: "Company created successfully.",
-    updated: "Company profile saved.",
-    onboarded: "Company setup completed.",
   },
 };
 
 const ERRORS = {
   generic: "Something went wrong. Please try again.",
-  payloadTooLarge: "That file is too large. Please use an image under 300KB.",
   validation: "Please check the form and fill in all required details.",
   notFound: {
     medicine: "This medicine could not be found.",
@@ -41,8 +32,6 @@ const ERRORS = {
     customerByDlNo: "No customer found with this Drug License number.",
     invoice: "This invoice could not be found.",
     purchase: "This purchase entry could not be found.",
-    company: "This company could not be found.",
-    user: "This user could not be found.",
     route: "The page or link you used is not available.",
   },
   loadFailed: {
@@ -64,16 +53,12 @@ const ERRORS = {
     purchase: "Could not load purchase details. Please try again.",
     purchaseNumber: "Could not create a new purchase number. Please try again.",
     ledger: "Could not load stock ledger. Please refresh and try again.",
-    company: "Could not load company details. Please refresh and try again.",
-    users: "Could not load users. Please refresh and try again.",
   },
   saveFailed: {
     medicine: "Could not save medicine. Please check the details and try again.",
     customer: "Could not save customer. Please check the details and try again.",
     invoice: "Could not save invoice. Please check the details and try again.",
     purchase: "Could not save purchase entry. Please check the details and try again.",
-    company: "Could not save company details. Please check the details and try again.",
-    user: "Could not save user. Please check the details and try again.",
   },
   insufficientStock:
     "Not enough stock in inventory for one or more medicines on this invoice.",
@@ -91,15 +76,10 @@ const ERRORS = {
     dlNo: "A customer with this Drug License number already exists.",
     invoiceNumber: "This invoice number is already in use. Please use a different number.",
     username: "This username is already taken.",
-    telegramChatId: "This Telegram chat is already linked to another company.",
   },
   auth: {
     unauthorized: "Please sign in to continue.",
     forbidden: "You are not allowed to perform this action.",
-    readOnly: "Your account has view-only access. Ask an admin to make this change.",
-    lastAdmin: "This is the only admin on the account. Promote another user before changing this one.",
-    selfRoleChange: "You cannot change your own role.",
-    selfDelete: "You cannot remove your own account.",
     invalidCredentials: "Invalid username or password.",
     loginFailed: "Could not sign in. Please try again.",
     userCreateFailed: "Could not create user. Please check the details and try again.",
@@ -120,9 +100,6 @@ const VALIDATION_MESSAGES = {
   "PTR cannot be negative": "PTR cannot be less than zero.",
   "Quantity cannot be negative": "Quantity cannot be less than zero.",
   "Customer name is required": "Please enter the customer name.",
-  "Company name is required": "Please enter your company name.",
-  "Company is required": "Your account is not linked to a company. Please contact an admin.",
-  "Logo must be an image under 300KB.": "Please upload a PNG or JPG logo smaller than 300KB.",
   "Address is required": "Please enter the customer address.",
   "Invoice number is required": "Please enter an invoice number.",
   "Customer is required": "Please select a customer.",
@@ -138,7 +115,6 @@ const DUPLICATE_FIELD_LABELS = {
   dlNo: ERRORS.duplicate.dlNo,
   invoiceNumber: ERRORS.duplicate.invoiceNumber,
   username: ERRORS.duplicate.username,
-  telegramChatId: ERRORS.duplicate.telegramChatId,
 };
 
 function simplifyValidationMessage(message) {
@@ -163,9 +139,7 @@ function getDuplicateMessage(error) {
     return null;
   }
 
-  // Unique indexes are compound on `company`, so the first key is always the
-  // tenant - the field that actually clashed is the next one.
-  const field = Object.keys(error.keyPattern || {}).find((key) => key !== "company");
+  const field = Object.keys(error.keyPattern || {})[0];
   return DUPLICATE_FIELD_LABELS[field] || ERRORS.validation;
 }
 

@@ -40,7 +40,6 @@ const formatBucket = (bucket) => ({
 });
 
 const getGstQuarterlySummary = async ({
-  company,
   financialYear,
   quarter,
   month,
@@ -56,7 +55,6 @@ const getGstQuarterlySummary = async ({
   }
 
   const invoices = await Invoice.find({
-    company,
     invoiceType: { $ne: "purchase" },
     status: { $ne: "cancelled" },
     invoiceDate: { $gte: period.from, $lte: period.to },

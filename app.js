@@ -7,8 +7,6 @@ const swaggerUi = require("swagger-ui-express");
 const connectDB = require("./src/config/database");
 const swaggerDocument = require("./src/config/swagger");
 const authRoutes = require("./src/routes/auth.routes");
-const companyRoutes = require("./src/routes/company.routes");
-const userRoutes = require("./src/routes/user.routes");
 const medicineRoutes = require("./src/routes/medicine.routes");
 const customerRoutes = require("./src/routes/customer.routes");
 const invoiceRoutes = require("./src/routes/invoice.routes");
@@ -17,10 +15,7 @@ const ledgerRoutes = require("./src/routes/ledger.routes");
 const dashboardRoutes = require("./src/routes/dashboard.routes");
 const gstRoutes = require("./src/routes/gst.routes");
 const telegramRoutes = require("./src/routes/telegram.routes");
-const {
-  authenticate,
-  denyWritesForViewers,
-} = require("./src/middleware/auth.middleware");
+const { authenticate } = require("./src/middleware/auth.middleware");
 const { ERROR_CODES, sendSuccess, sendError } = require("./src/utils/response");
 const { ERRORS } = require("./src/utils/messages");
 const { startTelegramPolling } = require("./src/services/telegramBot.service");
@@ -57,10 +52,8 @@ app.use(
     credentials: true,
   }),
 );
-// A company logo travels inline as a base64 data URI (capped at ~300KB by the
-// Company model), which does not fit express's 100kb default.
-app.use(express.json({ limit: "1mb" }));
-app.use(express.urlencoded({ extended: true, limit: "1mb" }));
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 app.use(requestLogger);
 
 if (!isProduction) {
@@ -79,8 +72,6 @@ app.get("/", (req, res) => {
       version: "1.0.0",
       endpoints: {
         auth: "/api/auth",
-        company: "/api/company",
-        users: "/api/users",
         medicines: "/api/medicines",
         customers: "/api/customers",
         invoices: "/api/invoices",
@@ -97,33 +88,17 @@ app.get("/", (req, res) => {
 
 app.use("/api/auth", authRoutes);
 app.use("/api/telegram", telegramRoutes);
-app.use("/api/company", authenticate, companyRoutes);
-app.use("/api/users", authenticate, userRoutes);
-
-// Data routers are tenant-scoped inside their controllers and read-only for
-// viewers: denyWritesForViewers turns away anything that is not a GET before it
-// reaches a handler, so a route added later is covered by default.
-app.use("/api/medicines", authenticate, denyWritesForViewers, medicineRoutes);
-app.use("/api/customers", authenticate, denyWritesForViewers, customerRoutes);
-app.use("/api/invoices", authenticate, denyWritesForViewers, invoiceRoutes);
-app.use("/api/purchases", authenticate, denyWritesForViewers, purchaseRoutes);
-app.use("/api/ledger", authenticate, denyWritesForViewers, ledgerRoutes);
-app.use("/api/dashboard", authenticate, denyWritesForViewers, dashboardRoutes);
-app.use("/api/gst", authenticate, denyWritesForViewers, gstRoutes);
+app.use("/api/medicines", authenticate, medicineRoutes);
+app.use("/api/customers", authenticate, customerRoutes);
+app.use("/api/invoices", authenticate, invoiceRoutes);
+app.use("/api/purchases", authenticate, purchaseRoutes);
+app.use("/api/ledger", authenticate, ledgerRoutes);
+app.use("/api/dashboard", authenticate, dashboardRoutes);
+app.use("/api/gst", authenticate, gstRoutes);
 
 Sentry.setupExpressErrorHandler(app);
 
 app.use((err, req, res, next) => {
-  // A body over the parser limit is the caller's problem, not a server fault.
-  if (err?.type === "entity.too.large") {
-    return sendError(res, {
-      message: ERRORS.payloadTooLarge,
-      code: ERROR_CODES.VALIDATION_ERROR,
-      errorMessage: ERRORS.payloadTooLarge,
-      statusCode: 413,
-    });
-  }
-
   logger.error("Unhandled API Error", err);
   return sendError(res, {
     message: ERRORS.generic,

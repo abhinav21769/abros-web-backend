@@ -14,10 +14,7 @@ const getCachedUser = async (userId) => {
     return cached.user;
   }
 
-  const user = await User.findById(userId)
-    .select("-password")
-    .populate("company", "name logo isActive onboardingCompleted")
-    .lean();
+  const user = await User.findById(userId).select("-password").lean();
   if (user) {
     userCache.set(cacheKey, {
       user,
@@ -64,21 +61,7 @@ const authenticate = async (req, res, next) => {
       });
     }
 
-    // C-1 FIX: a user whose company was deactivated must not keep working off a
-    // cached token - the tenant gate is checked on every request, not at login.
-    if (!user.company || user.company.isActive === false) {
-      return sendError(res, {
-        message: ERRORS.auth.unauthorized,
-        code: ERROR_CODES.UNAUTHORIZED,
-        errorMessage: ERRORS.auth.unauthorized,
-        statusCode: 401,
-      });
-    }
-
     req.user = user;
-    // Every tenant-scoped query reads this instead of digging into req.user, so
-    // a missed scope is easy to spot in review.
-    req.companyId = user.company._id;
     return next();
   } catch (error) {
     return sendError(res, {
@@ -106,64 +89,4 @@ const requireAdminSecret = (req, res, next) => {
   return next();
 };
 
-// Role gate. A viewer may read everything in their own company and change
-// nothing; the UI hides the controls, this is what actually enforces it.
-const requireRole = (...roles) => (req, res, next) => {
-  if (!req.user || !roles.includes(req.user.role)) {
-    return sendError(res, {
-      message: ERRORS.auth.forbidden,
-      code: ERROR_CODES.FORBIDDEN,
-      errorMessage: ERRORS.auth.readOnly,
-      statusCode: 403,
-    });
-  }
-  return next();
-};
-
-const requireAdmin = requireRole("admin");
-
-// Blanket write gate for the data routers: every mutation there is a POST, PUT,
-// PATCH or DELETE, so one guard covers routes added later too.
-const denyWritesForViewers = (req, res, next) => {
-  if (req.method === "GET" || req.method === "HEAD" || req.method === "OPTIONS") {
-    return next();
-  }
-  return requireAdmin(req, res, next);
-};
-
-// Cache invalidation for the 5-minute user cache: called when a user's role or
-// active flag changes so the change is not delayed behind the TTL.
-const invalidateUserCache = (userId) => {
-  if (userId == null) {
-    userCache.clear();
-    return;
-  }
-  userCache.delete(String(userId));
-};
-
-// The cached user carries a populated company, so a profile change has to drop
-// every cached user of that company. Without this, finishing onboarding leaves
-// /api/auth/me reporting the old company for up to the cache TTL - and the app
-// sends the admin straight back into the setup wizard on their next reload.
-const invalidateCompanyCache = (companyId) => {
-  if (companyId == null) return;
-  const target = String(companyId);
-
-  for (const [key, entry] of userCache.entries()) {
-    const company = entry.user?.company;
-    const cachedId = company?._id ?? company;
-    if (cachedId && String(cachedId) === target) {
-      userCache.delete(key);
-    }
-  }
-};
-
-module.exports = {
-  authenticate,
-  requireAdminSecret,
-  requireRole,
-  requireAdmin,
-  denyWritesForViewers,
-  invalidateUserCache,
-  invalidateCompanyCache,
-};
+module.exports = { authenticate, requireAdminSecret };

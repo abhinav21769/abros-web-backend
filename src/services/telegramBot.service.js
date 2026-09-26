@@ -1,6 +1,5 @@
 const Customer = require("../models/customer.model");
 const Medicine = require("../models/medicine.model");
-const Company = require("../models/company.model");
 const { createInvoiceRecord } = require("./invoice.service");
 const { buildInvoicePdf } = require("../utils/fullInvoicePdf");
 const logger = require("../utils/logger");
@@ -23,6 +22,10 @@ function getBotToken() {
   return process.env.TELEGRAM_BOT_TOKEN;
 }
 
+function getOwnerChatId() {
+  return String(process.env.TELEGRAM_OWNER_CHAT_ID || "").trim();
+}
+
 function isConfigured() {
   return Boolean(getBotToken());
 }
@@ -31,22 +34,17 @@ function telegramUrl(method) {
   return `${TELEGRAM_API}${getBotToken()}/${method}`;
 }
 
-// The bot is multi-tenant: which company a message bills against is decided by
-// the chat it arrived from. An admin links their chat id on the company profile,
-// and an unlinked chat can do nothing - that link is the access gate.
-async function resolveCompanyForChat(chatId) {
-  const company = await Company.findOne({
-    telegramChatId: String(chatId),
-    isActive: true,
-  }).lean();
-
-  if (!company) {
+function assertOwner(chatId) {
+  const ownerChatId = getOwnerChatId();
+  if (!ownerChatId) {
     throw new AgentBillError(
-      `This chat is not linked to a company. Ask an admin to add chat id ${chatId} under Settings - Company.`,
+      `Owner chat id is not configured. Your chat id is ${chatId}. Add it as TELEGRAM_OWNER_CHAT_ID.`,
     );
   }
 
-  return company;
+  if (String(chatId) !== ownerChatId) {
+    throw new AgentBillError("This bot is private.");
+  }
 }
 
 async function sendTelegramMessage(chatId, text) {
@@ -101,12 +99,9 @@ function extractJson(text) {
   return JSON.parse(cleaned.slice(start, end + 1));
 }
 
-async function fetchDatabaseContext(company) {
-  const customers = await Customer.find({ company }, "name address contact gstin dlNo").lean();
-  const medicines = await Medicine.find(
-    { company },
-    "name ptr mrp rate packagingType batchNumber expiryDate hsn gstRate quantity",
-  ).lean();
+async function fetchDatabaseContext() {
+  const customers = await Customer.find({}, "name address contact gstin dlNo").lean();
+  const medicines = await Medicine.find({}, "name ptr mrp rate packagingType batchNumber expiryDate hsn gstRate quantity").lean();
 
   const customerListText = customers
     .map(
@@ -125,13 +120,13 @@ async function fetchDatabaseContext(company) {
   return { customers, medicines, customerListText, medicineListText };
 }
 
-async function parseBillMessage(company, message) {
+async function parseBillMessage(message) {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) {
     throw new AgentBillError("Gemini API key is not configured.");
   }
 
-  const dbContext = await fetchDatabaseContext(company._id);
+  const dbContext = await fetchDatabaseContext();
   const model = process.env.GEMINI_MODEL || "gemini-2.5-flash";
 
   const prompt = [
@@ -217,9 +212,9 @@ async function parseBillMessage(company, message) {
   return parsed;
 }
 
-async function findOrCreateCustomer(company, name, matchedCustomerId) {
+async function findOrCreateCustomer(name, matchedCustomerId) {
   if (matchedCustomerId) {
-    const customer = await Customer.findOne({ _id: matchedCustomerId, company });
+    const customer = await Customer.findById(matchedCustomerId);
     if (customer) return customer;
   }
 
@@ -230,14 +225,12 @@ async function findOrCreateCustomer(company, name, matchedCustomerId) {
 
   // 1. Exact match (case insensitive)
   const exact = await Customer.findOne({
-    company,
     name: { $regex: `^${escapeRegex(trimmedName)}$`, $options: "i" },
   });
   if (exact) return exact;
 
   // 2. Substring match (case insensitive)
   const contains = await Customer.findOne({
-    company,
     name: { $regex: escapeRegex(trimmedName), $options: "i" },
   });
   if (contains) return contains;
@@ -246,7 +239,6 @@ async function findOrCreateCustomer(company, name, matchedCustomerId) {
   const words = trimmedName.split(/\s+/).filter((w) => w.length > 2);
   for (const word of words) {
     const wordMatch = await Customer.findOne({
-      company,
       name: { $regex: escapeRegex(word), $options: "i" },
     });
     if (wordMatch) return wordMatch;
@@ -254,15 +246,14 @@ async function findOrCreateCustomer(company, name, matchedCustomerId) {
 
   // 4. Create new customer only if no existing customer matched
   return Customer.create({
-    company,
     name: trimmedName,
     address: "Not provided",
   });
 }
 
-async function findMedicineByName(company, name, matchedMedicineId) {
+async function findMedicineByName(name, matchedMedicineId) {
   if (matchedMedicineId) {
-    const medicine = await Medicine.findOne({ _id: matchedMedicineId, company });
+    const medicine = await Medicine.findById(matchedMedicineId);
     if (medicine) return medicine;
   }
 
@@ -272,13 +263,11 @@ async function findMedicineByName(company, name, matchedMedicineId) {
   }
 
   const exact = await Medicine.findOne({
-    company,
     name: { $regex: `^${escapeRegex(trimmedName)}$`, $options: "i" },
   });
   if (exact) return exact;
 
   const contains = await Medicine.findOne({
-    company,
     name: { $regex: escapeRegex(trimmedName), $options: "i" },
   }).sort({ quantity: -1, expiryDate: 1 });
 
@@ -302,9 +291,8 @@ function normalizeStatus(value, paymentType) {
   return paymentType === "credit" ? "pending" : "paid";
 }
 
-async function buildInvoicePayload(company, parsed) {
+async function buildInvoicePayload(parsed) {
   const customer = await findOrCreateCustomer(
-    company._id,
     parsed.customerName,
     parsed.matchedCustomerId
   );
@@ -314,7 +302,6 @@ async function buildInvoicePayload(company, parsed) {
 
   for (const item of parsed.items) {
     const medicine = await findMedicineByName(
-      company._id,
       item.medicineName,
       item.matchedMedicineId
     );
@@ -357,10 +344,10 @@ async function buildInvoicePayload(company, parsed) {
   };
 }
 
-async function createBillFromMessage(company, message) {
-  const parsed = await parseBillMessage(company, message);
-  const payload = await buildInvoicePayload(company, parsed);
-  return createInvoiceRecord({ ...payload, company: company._id });
+async function createBillFromMessage(message) {
+  const parsed = await parseBillMessage(message);
+  const payload = await buildInvoicePayload(parsed);
+  return createInvoiceRecord(payload);
 }
 
 async function handleTelegramMessage(message) {
@@ -372,16 +359,16 @@ async function handleTelegramMessage(message) {
   if (text === "/start" || text === "/help") {
     await sendTelegramMessage(
       chatId,
-      `<b>Billing Bot Ready!</b>\nYour Chat ID: <code>${chatId}</code>\n\nSend any order text (e.g. <i>"Ramesh Kumar Paracetamol 10 tabs 15.50 cash"</i>) to create an invoice and receive your A4 GST Tax Invoice PDF!`,
+      `<b>Abros Billing Bot Ready!</b>\nYour Chat ID: <code>${chatId}</code>\n\nSend any order text (e.g. <i>"Ramesh Kumar Paracetamol 10 tabs 15.50 cash"</i>) to create an invoice and receive your A4 GST Tax Invoice PDF!`,
     );
     return;
   }
 
-  const company = await resolveCompanyForChat(chatId);
+  assertOwner(chatId);
 
   await sendTelegramMessage(chatId, "Creating invoice...");
-  const invoice = await createBillFromMessage(company, text);
-  const pdfBuffer = await buildInvoicePdf(invoice, company);
+  const invoice = await createBillFromMessage(text);
+  const pdfBuffer = await buildInvoicePdf(invoice);
   const filename = `${invoice.invoiceNumber}.pdf`;
   await sendTelegramDocument(
     chatId,

@@ -9,8 +9,6 @@
     "start:dev": "cross-env NODE_ENV=development nodemon app.js",
     "start:prod": "cross-env NODE_ENV=production node app.js",
     "create-user": "node scripts/create-user.js",
-    "create-company": "node scripts/create-company.js",
-    "reset-database": "node scripts/reset-database.js",
     "migrate-batches": "node scripts/migrate-batches.js",
     "test": "cross-env NODE_ENV=test jest --runInBand --detectOpenHandles --forceExit"
   },

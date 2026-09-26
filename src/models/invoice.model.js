@@ -81,15 +81,10 @@ const invoiceItemSchema = new mongoose.Schema(
 
 const invoiceSchema = new mongoose.Schema(
   {
-    company: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "Company",
-      required: [true, "Company is required"],
-      index: true,
-    },
     invoiceNumber: {
       type: String,
       required: [true, "Invoice number is required"],
+      unique: true,
       trim: true,
       uppercase: true,
     },
@@ -175,11 +170,9 @@ const invoiceSchema = new mongoose.Schema(
   },
 );
 
-// The number series runs per company, so uniqueness is per company too.
-invoiceSchema.index({ company: 1, invoiceNumber: 1 }, { unique: true });
-invoiceSchema.index({ company: 1, invoiceType: 1, invoiceDate: -1 });
-invoiceSchema.index({ company: 1, customer: 1, invoiceDate: -1 });
-invoiceSchema.index({ company: 1, status: 1 });
+invoiceSchema.index({ invoiceType: 1, invoiceDate: -1 });
+invoiceSchema.index({ customer: 1, invoiceDate: -1 });
+invoiceSchema.index({ status: 1 });
 
 const Invoice = mongoose.model("Invoice", invoiceSchema);
 

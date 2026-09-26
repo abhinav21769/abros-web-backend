@@ -21,10 +21,7 @@ const normalizeCustomerPayload = (body = {}) => {
 
 const createCustomer = async (req, res) => {
   try {
-    const customer = new Customer({
-      ...normalizeCustomerPayload(req.body),
-      company: req.companyId,
-    });
+    const customer = new Customer(normalizeCustomerPayload(req.body));
     await customer.save();
     return sendSuccess(res, {
       message: SUCCESS.customer.created,
@@ -58,7 +55,7 @@ const getAllCustomers = async (req, res) => {
     const ALLOWED_SORT_FIELDS = ["createdAt", "name", "contact"];
     const safeSortBy = ALLOWED_SORT_FIELDS.includes(sortBy) ? sortBy : "createdAt";
 
-    const filter = { company: req.companyId };
+    const filter = {};
 
     if (name) {
       filter.name = { $regex: name, $options: "i" };
@@ -109,10 +106,7 @@ const getAllCustomers = async (req, res) => {
 
 const getCustomerById = async (req, res) => {
   try {
-    const customer = await Customer.findOne({
-      _id: req.params.id,
-      company: req.companyId,
-    });
+    const customer = await Customer.findById(req.params.id);
 
     if (!customer) {
       return sendError(res, {
@@ -137,7 +131,6 @@ const getCustomerById = async (req, res) => {
 const getCustomerByDlNo = async (req, res) => {
   try {
     const customer = await Customer.findOne({
-      company: req.companyId,
       dlNo: req.params.dlNo.toUpperCase(),
     });
 
@@ -163,16 +156,13 @@ const getCustomerByDlNo = async (req, res) => {
 
 const updateCustomer = async (req, res) => {
   try {
-    // The company filter is part of the query, not the payload: a customer id
-    // from another tenant simply does not match.
-    const { company, ...payload } = normalizeCustomerPayload(req.body);
-    const customer = await Customer.findOneAndUpdate(
-      { _id: req.params.id, company: req.companyId },
-      payload,
+    const customer = await Customer.findByIdAndUpdate(
+      req.params.id,
+      normalizeCustomerPayload(req.body),
       {
-        new: true,
-        runValidators: true,
-      },
+      new: true,
+      runValidators: true,
+    },
     );
 
     if (!customer) {
@@ -200,10 +190,7 @@ const updateCustomer = async (req, res) => {
 
 const deleteCustomer = async (req, res) => {
   try {
-    const customer = await Customer.findOneAndDelete({
-      _id: req.params.id,
-      company: req.companyId,
-    });
+    const customer = await Customer.findByIdAndDelete(req.params.id);
 
     if (!customer) {
       return sendError(res, {
@@ -232,7 +219,7 @@ const { getCustomerStatsData } = require("../services/stats.service");
 
 const getCustomerStats = async (req, res) => {
   try {
-    const data = await getCustomerStatsData(req.companyId);
+    const data = await getCustomerStatsData();
 
     return sendSuccess(res, { data });
   } catch (error) {

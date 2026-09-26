@@ -48,15 +48,10 @@ const purchaseItemSchema = new mongoose.Schema(
 
 const purchaseSchema = new mongoose.Schema(
   {
-    company: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "Company",
-      required: [true, "Company is required"],
-      index: true,
-    },
     purchaseNumber: {
       type: String,
       required: [true, "Purchase number is required"],
+      unique: true,
       trim: true,
       uppercase: true,
     },
@@ -96,8 +91,7 @@ const purchaseSchema = new mongoose.Schema(
   },
 );
 
-purchaseSchema.index({ company: 1, purchaseNumber: 1 }, { unique: true });
-purchaseSchema.index({ company: 1, purchaseDate: -1 });
+purchaseSchema.index({ purchaseDate: -1 });
 
 const Purchase = mongoose.model("Purchase", purchaseSchema);
 

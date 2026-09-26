@@ -15,7 +15,6 @@ const getQuarterlySummary = async (req, res) => {
     const periodType = req.query.periodType;
 
     const data = await getGstQuarterlySummary({
-      company: req.companyId,
       financialYear,
       quarter,
       month,

@@ -2,12 +2,6 @@ const mongoose = require("mongoose");
 
 const stockLedgerSchema = new mongoose.Schema(
   {
-    company: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "Company",
-      required: [true, "Company is required"],
-      index: true,
-    },
     medicine: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Medicine",
@@ -59,8 +53,7 @@ const stockLedgerSchema = new mongoose.Schema(
   },
 );
 
-stockLedgerSchema.index({ company: 1, createdAt: -1 });
-stockLedgerSchema.index({ company: 1, medicine: 1, createdAt: -1 });
+stockLedgerSchema.index({ createdAt: -1 });
 
 const StockLedger = mongoose.model("StockLedger", stockLedgerSchema);
 

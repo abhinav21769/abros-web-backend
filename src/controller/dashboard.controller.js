@@ -11,7 +11,7 @@ const {
 const getDashboardStats = async (req, res) => {
   try {
     const days = parseInt(req.query.days) || EXPIRING_SOON_DAYS;
-    const data = await getDashboardStatsData(req.companyId, days);
+    const data = await getDashboardStatsData(days);
 
     return sendSuccess(res, { data });
   } catch (error) {
@@ -27,12 +27,7 @@ const getDashboardStats = async (req, res) => {
 const getProductWiseMonthlySales = async (req, res) => {
   try {
     const { year, financialYear, search } = req.query;
-    const data = await getProductWiseMonthlySalesData({
-      company: req.companyId,
-      year,
-      financialYear,
-      search,
-    });
+    const data = await getProductWiseMonthlySalesData({ year, financialYear, search });
 
     return sendSuccess(res, { data });
   } catch (error) {
@@ -48,12 +43,7 @@ const getProductWiseMonthlySales = async (req, res) => {
 const getCustomerWiseSales = async (req, res) => {
   try {
     const { year, financialYear, search } = req.query;
-    const data = await getCustomerWiseSalesData({
-      company: req.companyId,
-      year,
-      financialYear,
-      search,
-    });
+    const data = await getCustomerWiseSalesData({ year, financialYear, search });
 
     return sendSuccess(res, { data });
   } catch (error) {
@@ -69,13 +59,7 @@ const getCustomerWiseSales = async (req, res) => {
 const getCustomerProductMonthlySales = async (req, res) => {
   try {
     const { year, financialYear, customerId, search } = req.query;
-    const data = await getCustomerProductMonthlySalesData({
-      company: req.companyId,
-      year,
-      financialYear,
-      customerId,
-      search,
-    });
+    const data = await getCustomerProductMonthlySalesData({ year, financialYear, customerId, search });
 
     return sendSuccess(res, { data });
   } catch (error) {

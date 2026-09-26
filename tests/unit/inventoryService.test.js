@@ -1,6 +1,5 @@
 const Medicine = require("../../src/models/medicine.model");
 const StockLedger = require("../../src/models/stockLedger.model");
-const Company = require("../../src/models/company.model");
 const {
   deductStockForItems,
   addStockForItems,
@@ -10,12 +9,9 @@ const {
 
 describe("Inventory Service", () => {
   let testMedicine;
-  let company;
 
   beforeEach(async () => {
-    company = await Company.create({ name: "Test Pharma" });
     testMedicine = await Medicine.create({
-      company: company._id,
       name: "Paracetamol 500mg",
       packagingType: "10x10 Tablets",
       manufacturer: "Abros Labs",
@@ -53,7 +49,7 @@ describe("Inventory Service", () => {
         },
       ];
 
-      await deductStockForItems(company._id, items, null, {
+      await deductStockForItems(items, null, {
         type: "sale",
         referenceLabel: "INV-001",
       });
@@ -73,7 +69,7 @@ describe("Inventory Service", () => {
         },
       ];
 
-      await deductStockForItems(company._id, items);
+      await deductStockForItems(items);
 
       const updated = await Medicine.findById(testMedicine._id);
       const batchA = updated.batches.find((b) => b.batchNumber === "BATCH-A");
@@ -94,7 +90,7 @@ describe("Inventory Service", () => {
         },
       ];
 
-      await expect(deductStockForItems(company._id, items)).rejects.toThrow(
+      await expect(deductStockForItems(items)).rejects.toThrow(
         InsufficientStockError,
       );
     });
@@ -108,7 +104,7 @@ describe("Inventory Service", () => {
         },
       ];
 
-      await expect(deductStockForItems(company._id, items)).rejects.toThrow(
+      await expect(deductStockForItems(items)).rejects.toThrow(
         InsufficientStockError,
       );
     });
@@ -125,7 +121,7 @@ describe("Inventory Service", () => {
         },
       ];
 
-      await addStockForItems(company._id, items, null, {
+      await addStockForItems(items, null, {
         type: "purchase",
         referenceLabel: "PUR-001",
       });
@@ -149,7 +145,7 @@ describe("Inventory Service", () => {
         },
       ];
 
-      await addStockForItems(company._id, items, null, {
+      await addStockForItems(items, null, {
         type: "purchase",
         referenceLabel: "PUR-002",
       });
@@ -173,7 +169,7 @@ describe("Inventory Service", () => {
         },
       ];
 
-      await restoreStockForItems(company._id, items, null, {
+      await restoreStockForItems(items, null, {
         referenceLabel: "CANCELLED-INV-001",
       });
 

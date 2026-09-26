@@ -18,7 +18,7 @@ npm run dev
 | `JWT_SECRET` | Secret for signing login tokens |
 | `JWT_EXPIRES_IN` | Token lifetime (default: `7d`) |
 | `TELEGRAM_BOT_TOKEN` | Telegram bot token from BotFather |
-| `TELEGRAM_OWNER_CHAT_ID` | Legacy, unused: a chat is allowed to create bills by being linked to a company under Settings |
+| `TELEGRAM_OWNER_CHAT_ID` | Telegram chat ID allowed to create bills |
 | `TELEGRAM_ENABLE_POLLING` | Set `true` for local bot polling, `false` for webhook mode |
 | `TELEGRAM_WEBHOOK_SECRET` | Random secret Telegram will send with webhook requests |
 | `GEMINI_API_KEY` | Gemini API key for parsing bill messages |
@@ -40,7 +40,7 @@ Admin-only user creation:
 ### Create a user (CLI)
 
 ```bash
-npm run create-company -- "Your Pharmacy" admin your-secure-password "Admin User"
+npm run create-user -- admin your-secure-password "Admin User"
 ```
 
 ### Create a user (API)

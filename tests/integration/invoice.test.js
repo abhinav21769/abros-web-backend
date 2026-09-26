@@ -57,7 +57,7 @@ describe("Invoice API Endpoints", () => {
 
       expect(res.status).toBe(201);
       expect(res.body.success).toBe(true);
-      expect(res.body.data.invoiceNumber).toMatch(/^INV-\d{4}-\d{3}$/);
+      expect(res.body.data.invoiceNumber).toMatch(/^AH-\d{4}-\d{3}$/);
       expect(res.body.data.status).toBe("paid"); // cash payment is marked paid
 
       // Verify stock deducted in DB
