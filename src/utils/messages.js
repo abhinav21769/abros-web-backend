@@ -17,6 +17,12 @@ const SUCCESS = {
   purchase: {
     created: "Purchase entry saved and stock updated.",
   },
+  customerService: {
+    unlocked: "Customer Services unlocked.",
+    created: "Entry added successfully.",
+    updated: "Entry details saved.",
+    deleted: "Entry removed successfully.",
+  },
   auth: {
     login: "Signed in successfully.",
     userCreated: "User created successfully.",
@@ -33,6 +39,7 @@ const ERRORS = {
     invoice: "This invoice could not be found.",
     purchase: "This purchase entry could not be found.",
     route: "The page or link you used is not available.",
+    customerServiceEntry: "This entry could not be found.",
   },
   loadFailed: {
     medicines: "Could not load medicines. Please refresh and try again.",
@@ -53,12 +60,14 @@ const ERRORS = {
     purchase: "Could not load purchase details. Please try again.",
     purchaseNumber: "Could not create a new purchase number. Please try again.",
     ledger: "Could not load stock ledger. Please refresh and try again.",
+    customerServiceEntries: "Could not load customer service entries. Please refresh and try again.",
   },
   saveFailed: {
     medicine: "Could not save medicine. Please check the details and try again.",
     customer: "Could not save customer. Please check the details and try again.",
     invoice: "Could not save invoice. Please check the details and try again.",
     purchase: "Could not save purchase entry. Please check the details and try again.",
+    customerServiceEntry: "Could not save entry. Please check the details and try again.",
   },
   insufficientStock:
     "Not enough stock in inventory for one or more medicines on this invoice.",
@@ -66,6 +75,7 @@ const ERRORS = {
     medicine: "Could not remove medicine. Please try again.",
     customer: "Could not remove customer. Please try again.",
     invoice: "Could not delete invoice. Please try again.",
+    customerServiceEntry: "Could not remove entry. Please try again.",
   },
   immutable: {
     invoiceNumber:
@@ -84,6 +94,11 @@ const ERRORS = {
     loginFailed: "Could not sign in. Please try again.",
     userCreateFailed: "Could not create user. Please check the details and try again.",
     misconfigured: "Authentication is not configured on the server.",
+  },
+  sectionLock: {
+    locked: "Customer Services is locked. Please enter the password to continue.",
+    wrongPassword: "Incorrect Customer Services password.",
+    notConfigured: "Customer Services password is not set up on the server.",
   },
 };
 
@@ -108,6 +123,11 @@ const VALIDATION_MESSAGES = {
   "Medicine name is required": "Please enter the medicine name for each item.",
   "Quantity is required": "Please enter the quantity for each item.",
   "Quantity must be at least 1": "Quantity must be at least 1.",
+  "Amount is required": "Please enter the amount.",
+  "Amount cannot be negative": "Amount cannot be less than zero.",
+  "Date is required": "Please select a date.",
+  "Customer name is too long": "Customer name must be 200 characters or fewer.",
+  "Remarks are too long": "Remarks must be 1000 characters or fewer.",
 };
 
 const DUPLICATE_FIELD_LABELS = {

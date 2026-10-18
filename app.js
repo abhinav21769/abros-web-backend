@@ -14,6 +14,7 @@ const purchaseRoutes = require("./src/routes/purchase.routes");
 const ledgerRoutes = require("./src/routes/ledger.routes");
 const dashboardRoutes = require("./src/routes/dashboard.routes");
 const gstRoutes = require("./src/routes/gst.routes");
+const customerServiceRoutes = require("./src/routes/customerService.routes");
 const telegramRoutes = require("./src/routes/telegram.routes");
 const { authenticate } = require("./src/middleware/auth.middleware");
 const { ERROR_CODES, sendSuccess, sendError } = require("./src/utils/response");
@@ -79,6 +80,7 @@ app.get("/", (req, res) => {
         ledger: "/api/ledger",
         dashboard: "/api/dashboard",
         gst: "/api/gst",
+        customerServices: "/api/customer-services",
         telegram: "/api/telegram",
         ...(isProduction ? {} : { swagger: "/api-docs" }),
       },
@@ -95,6 +97,7 @@ app.use("/api/purchases", authenticate, purchaseRoutes);
 app.use("/api/ledger", authenticate, ledgerRoutes);
 app.use("/api/dashboard", authenticate, dashboardRoutes);
 app.use("/api/gst", authenticate, gstRoutes);
+app.use("/api/customer-services", authenticate, customerServiceRoutes);
 
 Sentry.setupExpressErrorHandler(app);
 
