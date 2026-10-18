@@ -10,6 +10,7 @@
     "start:prod": "cross-env NODE_ENV=production node app.js",
     "create-user": "node scripts/create-user.js",
     "migrate-batches": "node scripts/migrate-batches.js",
+    "report-legacy-gst-rates": "node scripts/report-legacy-gst-rates.js",
     "test": "cross-env NODE_ENV=test jest --runInBand --detectOpenHandles --forceExit"
   },
   "jest": {

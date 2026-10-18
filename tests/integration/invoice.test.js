@@ -66,6 +66,36 @@ describe("Invoice API Endpoints", () => {
       expect(updatedMed.batches[0].quantity).toBe(40);
     });
 
+    test("a 0% GST line is saved at 0% and adds no tax to the total", async () => {
+      const res = await request(app)
+        .post("/api/invoices")
+        .set("Authorization", `Bearer ${authToken}`)
+        .send({
+          invoiceType: "sale",
+          customer: customer._id,
+          paymentType: "cash",
+          items: [
+            {
+              medicine: medicine._id,
+              medicineName: medicine.name,
+              batchNumber: "BAT-INV-01",
+              quantity: 10,
+              rate: 80,
+              gstRate: 0,
+            },
+          ],
+        });
+
+      expect(res.status).toBe(201);
+      expect(res.body.data.items[0].gstRate).toBe(0);
+      expect(res.body.data.subtotal).toBe(800);
+      expect(res.body.data.total).toBe(800);
+
+      const saved = await Invoice.findById(res.body.data._id);
+      expect(saved.items[0].gstRate).toBe(0);
+      expect(saved.total).toBe(800);
+    });
+
     test("fails when requested quantity exceeds available stock", async () => {
       const payload = {
         customer: customer._id,

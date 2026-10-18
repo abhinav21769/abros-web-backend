@@ -1,6 +1,11 @@
 const DEFAULT_GST_RATE = 5;
 
+// Only empty or invalid input falls back to the default; 0 stays 0.
+// Must stay identical to the frontend's normalizeGstRate.
 const normalizeGstRate = (value) => {
+  if (value == null || (typeof value === "string" && value.trim() === "")) {
+    return DEFAULT_GST_RATE;
+  }
   const rate = Number(value);
   if (!Number.isFinite(rate) || rate < 0) return DEFAULT_GST_RATE;
   return rate;
