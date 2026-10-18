@@ -17,6 +17,8 @@ services:
         sync: false
       - key: ADMIN_SECRET
         sync: false
+      - key: CUSTOMER_SERVICES_PASSWORD
+        sync: false
       - key: TELEGRAM_BOT_TOKEN
         sync: false
       - key: TELEGRAM_OWNER_CHAT_ID
@@ -51,6 +53,8 @@ services:
       - key: JWT_SECRET
         sync: false
       - key: ADMIN_SECRET
+        sync: false
+      - key: CUSTOMER_SERVICES_PASSWORD
         sync: false
       # Telegram bot stays off on dev: one bot token can only be polled by one
       # process, and a second poller would steal production's updates. Leave
