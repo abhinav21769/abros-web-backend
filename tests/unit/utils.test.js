@@ -7,6 +7,9 @@ const {
   calculateInvoiceTaxBreakdown,
 } = require("../../src/utils/invoiceTax");
 const {
+  calculateInvoiceTax: calculateTelegramInvoiceTax,
+} = require("../../src/utils/telegramInvoiceTax");
+const {
   QUARTER_LABELS,
   MONTH_NAMES,
   getFinancialYearStart,
@@ -89,6 +92,53 @@ describe("Invoice Tax Calculations", () => {
     expect(normalizeGstRate("invalid")).toBe(DEFAULT_GST_RATE);
     expect(normalizeGstRate(0)).toBe(0);
     expect(normalizeGstRate(12)).toBe(12);
+  });
+
+  test("normalizeGstRate keeps 0 and only defaults empty input", () => {
+    expect(normalizeGstRate(0)).toBe(0);
+    expect(normalizeGstRate("0")).toBe(0);
+    expect(normalizeGstRate(40)).toBe(40);
+    expect(normalizeGstRate("18")).toBe(18);
+    expect(normalizeGstRate(null)).toBe(DEFAULT_GST_RATE);
+    expect(normalizeGstRate("")).toBe(DEFAULT_GST_RATE);
+    expect(normalizeGstRate("  ")).toBe(DEFAULT_GST_RATE);
+  });
+
+  test("a 0% line adds no tax, alongside a 40% line", () => {
+    const items = [
+      { quantity: 10, rate: 50, discount: 0, gstRate: 0 }, // 500, no tax
+      { quantity: 1, rate: 1000, discount: 10, gstRate: 40 }, // 900, 20% + 20% = 180 + 180
+    ];
+
+    const totals = buildInvoiceTotals(items);
+    expect(totals.items[0].gstRate).toBe(0);
+    expect(totals.items[1].gstRate).toBe(40);
+    expect(totals.subtotal).toBe(1400);
+    expect(totals.total).toBe(1760);
+
+    const breakdown = calculateInvoiceTaxBreakdown(items);
+    expect(breakdown.cgst).toBe(180);
+    expect(breakdown.sgst).toBe(180);
+    expect(breakdown.gst).toBe(360);
+  });
+
+  test("an all-0% invoice totals to its subtotal", () => {
+    const breakdown = calculateInvoiceTaxBreakdown([
+      { quantity: 3, rate: 33.33, discount: 0, gstRate: 0 },
+    ]);
+    expect(breakdown.subtotal).toBe(99.99);
+    expect(breakdown.gst).toBe(0);
+    expect(breakdown.total).toBe(100);
+  });
+
+  test("the Telegram bill summary keeps a 0% line at 0%", () => {
+    const tax = calculateTelegramInvoiceTax([
+      { amount: 500, gstRate: 0 },
+      { amount: 100, gstRate: 18 },
+    ]);
+    expect(tax.cgst).toBe(9);
+    expect(tax.sgst).toBe(9);
+    expect(tax.grandTotal).toBe(618);
   });
 
   test("normalizeDiscount restricts between 0 and 100", () => {

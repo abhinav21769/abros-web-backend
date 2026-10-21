@@ -2,6 +2,7 @@ const { jsPDF } = require("jspdf");
 const autoTableImport = require("jspdf-autotable");
 const autoTable = autoTableImport.default || autoTableImport;
 const QRCode = require("qrcode");
+const { normalizeGstRate } = require("./invoiceTax");
 
 const SELLER = {
   name: "ABROS HEALTHCARE",
@@ -105,7 +106,7 @@ function getLineItemHsn(item) {
 
 function getLineItemGstRate(item) {
   const med = getMedicine(item);
-  return Number(item.gstRate ?? med?.gstRate ?? 5);
+  return normalizeGstRate(item.gstRate ?? med?.gstRate);
 }
 
 function getLineTotalWithGst(item) {

@@ -3,6 +3,7 @@ const Medicine = require("../models/medicine.model");
 const { createInvoiceRecord } = require("./invoice.service");
 const { buildInvoicePdf } = require("../utils/fullInvoicePdf");
 const logger = require("../utils/logger");
+const { normalizeGstRate } = require("../utils/invoiceTax");
 
 const TELEGRAM_API = "https://api.telegram.org/bot";
 const GEMINI_API =
@@ -326,7 +327,7 @@ async function buildInvoicePayload(parsed) {
       expiryDate: primaryBatch?.expiryDate || medicine.expiryDate || undefined,
       mrp: primaryBatch?.mrp ?? medicine.mrp ?? undefined,
       hsn: medicine.hsn || undefined,
-      gstRate: Number(medicine.gstRate) || 5,
+      gstRate: normalizeGstRate(medicine.gstRate),
       discount: Number(item.discount) || 0,
       quantity,
       free: Number(item.free) || 0,

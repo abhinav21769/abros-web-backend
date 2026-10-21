@@ -1,7 +1,9 @@
+const { normalizeGstRate } = require("./invoiceTax");
+
 function calculateInvoiceTax(items = []) {
   const lineItems = items.map((item) => {
     const amount = Number(item.amount) || 0;
-    const gstRate = Number(item.gstRate) || 5;
+    const gstRate = normalizeGstRate(item.gstRate);
     const halfRate = gstRate / 200;
     const cgst = Math.round(amount * halfRate * 100) / 100;
     const sgst = Math.round(amount * halfRate * 100) / 100;

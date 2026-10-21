@@ -39,6 +39,29 @@ describe("Medicine API Endpoints", () => {
       expect(res.body.data.batches.length).toBe(1);
     });
 
+    test("a 0% GST medicine is saved at 0%, not the 5% default", async () => {
+      const res = await request(app)
+        .post("/api/medicines")
+        .set("Authorization", `Bearer ${authToken}`)
+        .send({
+          name: "Insulin Glargine 100IU",
+          packagingType: "3ml Cartridge",
+          hsn: "300431",
+          gstRate: 0,
+          batchNumber: "INS-01",
+          expiryDate: new Date(Date.now() + 200 * 86400000),
+          mrp: 500,
+          rate: 400,
+          ptr: 380,
+          quantity: 10,
+        });
+
+      expect(res.status).toBe(201);
+      expect(res.body.data.gstRate).toBe(0);
+      const saved = await Medicine.findById(res.body.data._id);
+      expect(saved.gstRate).toBe(0);
+    });
+
     test("fails if required fields are missing", async () => {
       const res = await request(app)
         .post("/api/medicines")
