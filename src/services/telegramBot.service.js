@@ -20,6 +20,11 @@ const {
   money,
 } = require("./billDraft.service");
 const { InsufficientStockError } = require("./inventory.service");
+const {
+  buildPendingReport,
+  buildStockReport,
+  buildTodayReport,
+} = require("./telegramCommands.service");
 const { buildInvoicePdf } = require("../utils/fullInvoicePdf");
 const { getUserMessage } = require("../utils/messages");
 const logger = require("../utils/logger");
@@ -50,8 +55,25 @@ const HELP_TEXT = [
   "<i>remove dolo</i> · <i>change customer to gupta</i> · <i>edit AH-2026-045 qty of rosmont 30</i>",
   "<i>delete the bill</i> (asks first)",
   "",
-  "/cancel drops the open draft.",
+  "<b>Commands</b>",
+  "/last - send the last bill again",
+  "/bill AH-2026-045 - send a bill by number",
+  "/today - today's sales",
+  "/pending - unpaid credit bills",
+  "/stock rosmont - stock and expiry of a medicine",
+  "/cancel - drop the open draft",
 ].join("\n");
+
+// Shown in Telegram's "/" menu.
+const BOT_COMMANDS = [
+  { command: "last", description: "Send the last bill again" },
+  { command: "bill", description: "Send a bill by number, e.g. /bill AH-2026-045" },
+  { command: "today", description: "Today's sales" },
+  { command: "pending", description: "Unpaid credit bills" },
+  { command: "stock", description: "Stock and expiry, e.g. /stock rosmont" },
+  { command: "cancel", description: "Drop the open draft" },
+  { command: "help", description: "How to use the bot" },
+];
 
 const getBotToken = () => process.env.TELEGRAM_BOT_TOKEN;
 const getOwnerChatId = () => String(process.env.TELEGRAM_OWNER_CHAT_ID || "").trim();
@@ -94,6 +116,9 @@ const sendTelegramMessage = (chatId, text, buttons) =>
     ...(buttons ? { reply_markup: { inline_keyboard: buttons } } : {}),
   });
 
+const registerBotCommands = () =>
+  telegramCall("setMyCommands", { commands: BOT_COMMANDS }).catch(() => null);
+
 const clearButtons = (message) => {
   if (!message?.chat?.id || !message?.message_id) return null;
   return telegramCall("editMessageReplyMarkup", {
@@ -123,6 +148,11 @@ const sendTelegramDocument = async (chatId, pdfBuffer, filename, caption) => {
     const body = await response.text();
     throw new AgentBillError(`Could not send PDF on Telegram. ${body}`);
   }
+};
+
+const sendInvoicePdf = async (chatId, invoice, caption) => {
+  const pdfBuffer = await buildInvoicePdf(invoice);
+  await sendTelegramDocument(chatId, pdfBuffer, `${invoice.invoiceNumber}.pdf`, caption);
 };
 
 const loadCatalog = async () => {
@@ -403,17 +433,74 @@ const confirmDraft = async (chatId, session) => {
     session.draft = null;
     session.lastInvoiceId = String(invoice._id);
 
-    const pdfBuffer = await buildInvoicePdf(invoice);
-    await sendTelegramDocument(
+    await sendInvoicePdf(
       chatId,
-      pdfBuffer,
-      `${invoice.invoiceNumber}.pdf`,
+      invoice,
       `${wasEdit ? "✏️ Updated" : "✅ Created"} <b>${escapeHtml(invoice.invoiceNumber)}</b> - Total ${money(invoice.total)}\nReply with a change (e.g. <i>add 5 free</i>) to edit it.`,
     );
   } finally {
     // Still set only when saving failed (e.g. not enough stock): the draft stays
     // so the owner can adjust it and try again.
     draft.confirming = false;
+  }
+};
+
+const handleCommand = async (chatId, text) => {
+  const [rawCommand, ...rest] = text.split(/\s+/);
+  const command = rawCommand.toLowerCase().replace(/@.*$/, "");
+  const args = rest.join(" ").trim();
+  const session = getSession(chatId);
+
+  switch (command) {
+    case "/cancel":
+      session.draft = null;
+      await sendTelegramMessage(chatId, "Draft discarded.");
+      return;
+
+    case "/last":
+    case "/bill": {
+      if (command === "/bill" && !args) {
+        await sendTelegramMessage(chatId, "Send the number, e.g. <code>/bill AH-2026-045</code>");
+        return;
+      }
+      const invoice = await findSaleInvoice(
+        session,
+        command === "/bill" ? args.toUpperCase() : null,
+      );
+      if (!invoice) {
+        await sendTelegramMessage(
+          chatId,
+          command === "/bill"
+            ? `I can't find a bill <b>${escapeHtml(args.toUpperCase())}</b>.`
+            : "No bills yet.",
+        );
+        return;
+      }
+      await sendInvoicePdf(
+        chatId,
+        invoice,
+        `🧾 <b>${escapeHtml(invoice.invoiceNumber)}</b> - ${escapeHtml(invoice.customer?.name || "")} - Total ${money(invoice.total)}`,
+      );
+      return;
+    }
+
+    case "/today":
+      await sendTelegramMessage(chatId, await buildTodayReport());
+      return;
+
+    case "/pending":
+      await sendTelegramMessage(chatId, await buildPendingReport());
+      return;
+
+    case "/stock":
+      await sendTelegramMessage(chatId, await buildStockReport(args));
+      return;
+
+    default:
+      await sendTelegramMessage(
+        chatId,
+        `I don't know <code>${escapeHtml(rawCommand)}</code>. Send /help to see what I can do.`,
+      );
   }
 };
 
@@ -428,10 +515,8 @@ const handleText = async (chatId, text) => {
 
   assertOwner(chatId);
 
-  if (text === "/cancel") {
-    const session = getSession(chatId);
-    session.draft = null;
-    await sendTelegramMessage(chatId, "Draft discarded.");
+  if (text.startsWith("/")) {
+    await handleCommand(chatId, text);
     return;
   }
 
@@ -531,6 +616,7 @@ const startTelegramPolling = async () => {
 
   pollingStarted = true;
   logger.info("Telegram billing bot polling started.");
+  registerBotCommands();
 
   while (pollingStarted) {
     try {
@@ -564,6 +650,7 @@ const startTelegramPolling = async () => {
 
 module.exports = {
   isConfigured,
+  registerBotCommands,
   processTelegramUpdate,
   startTelegramPolling,
 };
