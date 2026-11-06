@@ -4,86 +4,21 @@ const { ERROR_CODES, sendSuccess, sendError } = require("../utils/response");
 const { SUCCESS, ERRORS, getUserMessage } = require("../utils/messages");
 const logger = require("../utils/logger");
 
-const { buildInvoiceTotals } = require("../utils/invoiceTax");
 const {
+  ImmutableFieldError,
   MEDICINE_POPULATE_FIELDS,
   createInvoiceRecord,
   generateInvoiceNumberValue,
-  normalizeInvoiceDate,
   normalizeInvoiceType,
+  updateInvoiceRecord,
 } = require("../services/invoice.service");
 const {
   InsufficientStockError,
   deductStockForItems,
   isInvoiceStockActive,
   restoreStockForItems,
-  syncInvoiceStockChanges,
   withTransaction,
 } = require("../services/inventory.service");
-
-// H-1 FIX: an issued invoice is a tax record. Only the fields the billing form
-// actually edits may be changed; money (subtotal/total), payment timestamps and
-// identity (invoiceNumber/invoiceType) are derived here or frozen, never taken
-// from the request body.
-const SALE_UPDATABLE_FIELDS = [
-  "customer",
-  "invoiceDate",
-  "status",
-  "paymentType",
-  "notes",
-];
-
-const PURCHASE_UPDATABLE_FIELDS = [
-  "supplier",
-  "supplierAddress",
-  "supplierContact",
-  "supplierDlNo",
-  "supplierGstin",
-  "invoiceDate",
-  "status",
-  "paymentType",
-  "notes",
-];
-
-class ImmutableFieldError extends Error {
-  constructor(message) {
-    super(message);
-    this.name = "ImmutableFieldError";
-  }
-}
-
-const pickUpdatableFields = (body, invoiceType) => {
-  const allowed =
-    invoiceType === "purchase"
-      ? PURCHASE_UPDATABLE_FIELDS
-      : SALE_UPDATABLE_FIELDS;
-
-  const updateData = {};
-  for (const field of allowed) {
-    if (Object.prototype.hasOwnProperty.call(body, field)) {
-      updateData[field] = body[field];
-    }
-  }
-
-  return updateData;
-};
-
-// The billing form echoes the current number back on every edit, so only a
-// genuine change is rejected - and it is rejected loudly rather than ignored,
-// so the user is never told an edit was saved when it was not.
-const assertInvoiceNumberUnchanged = (body, existing) => {
-  if (
-    !Object.prototype.hasOwnProperty.call(body, "invoiceNumber") ||
-    body.invoiceNumber == null
-  ) {
-    return;
-  }
-
-  const requested = String(body.invoiceNumber).trim().toUpperCase();
-  if (requested && requested !== existing.invoiceNumber) {
-    throw new ImmutableFieldError(ERRORS.immutable.invoiceNumber);
-  }
-};
 
 const createInvoice = async (req, res) => {
   try {
@@ -218,84 +153,7 @@ const getInvoiceById = async (req, res) => {
 
 const updateInvoice = async (req, res) => {
   try {
-    const body = req.body || {};
-    const totals = body.items ? buildInvoiceTotals(body.items) : null;
-
-    const invoice = await withTransaction(async (session) => {
-      const existing = await Invoice.findById(req.params.id).session(session);
-
-      if (!existing) {
-        return null;
-      }
-
-      assertInvoiceNumberUnchanged(body, existing);
-
-      const updateData = pickUpdatableFields(
-        body,
-        existing.invoiceType || "sale",
-      );
-
-      if (updateData.invoiceDate) {
-        updateData.invoiceDate = normalizeInvoiceDate(updateData.invoiceDate);
-      }
-
-      // Totals always come from the items we just normalized. When the request
-      // carries no items, the stored totals are left exactly as they are.
-      if (totals) {
-        updateData.items = totals.items;
-        updateData.subtotal = totals.subtotal;
-        updateData.total = totals.total;
-      }
-
-      const oldStatus = existing.status;
-      const paymentType = updateData.paymentType ?? existing.paymentType;
-      const requestedStatus = updateData.status ?? oldStatus;
-      const newStatus =
-        paymentType === "cash" && requestedStatus !== "cancelled"
-          ? "paid"
-          : requestedStatus;
-      updateData.status = newStatus;
-
-      if (newStatus === "paid") {
-        if (oldStatus !== "paid" || !existing.paidAt) {
-          updateData.paidAt = new Date();
-        }
-      } else {
-        updateData.paidAt = null;
-      }
-      const oldItems = existing.items;
-      const newItems = totals ? totals.items : oldItems;
-
-      await syncInvoiceStockChanges(
-        oldItems,
-        oldStatus,
-        newItems,
-        newStatus,
-        existing.invoiceType || "sale",
-        session,
-        {
-          referenceType: "invoice",
-          referenceId: existing._id,
-          referenceLabel: existing.invoiceNumber,
-        },
-      );
-
-      // Cancelling is not a state the app stores: the bill is removed so its
-      // number returns to the series. Stock was already put back above.
-      if (newStatus === "cancelled") {
-        await existing.deleteOne({ session });
-        // Reported back as cancelled even though nothing was written, so the
-        // caller sees the outcome it asked for.
-        existing.status = "cancelled";
-        return existing;
-      }
-
-      return Invoice.findByIdAndUpdate(req.params.id, updateData, {
-        new: true,
-        runValidators: true,
-        session,
-      });
-    });
+    const invoice = await updateInvoiceRecord(req.params.id, req.body || {});
 
     if (!invoice) {
       return sendError(res, {
@@ -305,9 +163,6 @@ const updateInvoice = async (req, res) => {
         statusCode: 404,
       });
     }
-
-    await invoice.populate("customer", "name address contact gstin dlNo");
-    await invoice.populate("items.medicine", MEDICINE_POPULATE_FIELDS);
 
     return sendSuccess(res, {
       message:
