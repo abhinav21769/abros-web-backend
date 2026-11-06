@@ -4,6 +4,7 @@ const Customer = require("../../src/models/customer.model");
 const {
   processTelegramUpdate,
   registerBotCommands,
+  startTelegramPolling,
 } = require("../../src/services/telegramBot.service");
 const { createInvoiceRecord } = require("../../src/services/invoice.service");
 const { createTestCustomer, createTestMedicine } = require("./helpers");
@@ -401,5 +402,62 @@ describe("Telegram slash commands", () => {
     expect(call.body.commands.map((c) => c.command)).toEqual(
       expect.arrayContaining(["last", "bill", "today", "pending", "stock", "cancel"]),
     );
+  });
+});
+
+describe("Telegram start-up with a webhook", () => {
+  const withPolling = async (fn) => {
+    const previous = process.env.TELEGRAM_DISABLE_POLLING;
+    process.env.TELEGRAM_DISABLE_POLLING = "false";
+    try {
+      await fn();
+    } finally {
+      process.env.TELEGRAM_DISABLE_POLLING = previous;
+    }
+  };
+
+  const respondWithWebhook = (info) => {
+    global.fetch = jest.fn(async (url, options = {}) => {
+      const method = String(url).split("/").pop();
+      telegramCalls.push({
+        method,
+        body: typeof options.body === "string" ? JSON.parse(options.body) : options.body,
+      });
+      return json({ ok: true, result: method === "getWebhookInfo" ? info : {} });
+    });
+  };
+
+  it("adds button taps to a webhook that only lists messages", async () => {
+    process.env.TELEGRAM_WEBHOOK_SECRET = "hook-secret";
+    respondWithWebhook({
+      url: "https://example.onrender.com/api/telegram/webhook",
+      allowed_updates: ["message", "edited_message"],
+    });
+
+    await withPolling(() => startTelegramPolling());
+    delete process.env.TELEGRAM_WEBHOOK_SECRET;
+
+    const update = telegramCalls.find((c) => c.method === "setWebhook");
+    expect(update.body).toMatchObject({
+      url: "https://example.onrender.com/api/telegram/webhook",
+      secret_token: "hook-secret",
+    });
+    expect(update.body.allowed_updates).toEqual(
+      expect.arrayContaining(["message", "edited_message", "callback_query"]),
+    );
+    // A webhook is active, so the bot must not start polling.
+    expect(telegramCalls.some((c) => c.method === "getUpdates")).toBe(false);
+  });
+
+  it("leaves a webhook that already receives button taps alone", async () => {
+    respondWithWebhook({
+      url: "https://example.onrender.com/api/telegram/webhook",
+      allowed_updates: ["message", "callback_query"],
+    });
+
+    await withPolling(() => startTelegramPolling());
+
+    expect(telegramCalls.some((c) => c.method === "setWebhook")).toBe(false);
+    expect(telegramCalls.some((c) => c.method === "setMyCommands")).toBe(true);
   });
 });

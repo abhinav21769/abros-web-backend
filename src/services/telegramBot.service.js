@@ -32,6 +32,10 @@ const logger = require("../utils/logger");
 const TELEGRAM_API = "https://api.telegram.org/bot";
 const DRAFT_TTL_MS = 30 * 60 * 1000;
 
+// Button taps arrive as "callback_query" updates. A webhook registered without
+// this type never receives them, so the buttons would do nothing at all.
+const UPDATE_TYPES = ["message", "edited_message", "callback_query"];
+
 let pollingStarted = false;
 let pollingOffset = 0;
 
@@ -118,6 +122,30 @@ const sendTelegramMessage = (chatId, text, buttons) =>
 
 const registerBotCommands = () =>
   telegramCall("setMyCommands", { commands: BOT_COMMANDS }).catch(() => null);
+
+const getWebhookInfo = async () => {
+  const response = await telegramCall("getWebhookInfo", {});
+  if (!response?.ok) return null;
+  const data = await response.json();
+  return data?.result || null;
+};
+
+// A webhook set up before the buttons existed lists only message updates, so
+// Telegram would silently drop every tap. Re-registering the same URL with
+// callback_query added fixes it without anyone having to remember to.
+const ensureWebhookReceivesButtonTaps = async (info) => {
+  const current = info?.allowed_updates;
+  // An empty or missing list means "everything", which already includes taps.
+  if (!info?.url || !current?.length || current.includes("callback_query")) return;
+
+  const secret = process.env.TELEGRAM_WEBHOOK_SECRET;
+  await telegramCall("setWebhook", {
+    url: info.url,
+    allowed_updates: [...new Set([...current, "callback_query"])],
+    ...(secret ? { secret_token: secret } : {}),
+  });
+  logger.info("Telegram webhook updated to receive button taps.");
+};
 
 const clearButtons = (message) => {
   if (!message?.chat?.id || !message?.message_id) return null;
@@ -614,6 +642,18 @@ const startTelegramPolling = async () => {
     return;
   }
 
+  // With a webhook registered Telegram refuses getUpdates, so polling would only
+  // fail in a loop. The webhook delivers updates instead.
+  const webhook = await getWebhookInfo().catch(() => null);
+  if (webhook?.url) {
+    logger.info("Telegram webhook is active; polling skipped.");
+    await ensureWebhookReceivesButtonTaps(webhook).catch((error) =>
+      logger.error("Could not update the Telegram webhook", error),
+    );
+    registerBotCommands();
+    return;
+  }
+
   pollingStarted = true;
   logger.info("Telegram billing bot polling started.");
   registerBotCommands();
@@ -626,7 +666,7 @@ const startTelegramPolling = async () => {
         body: JSON.stringify({
           offset: pollingOffset || undefined,
           timeout: 25,
-          allowed_updates: ["message", "edited_message", "callback_query"],
+          allowed_updates: UPDATE_TYPES,
         }),
       });
       const data = await response.json();
@@ -653,4 +693,5 @@ module.exports = {
   registerBotCommands,
   processTelegramUpdate,
   startTelegramPolling,
+  UPDATE_TYPES,
 };
