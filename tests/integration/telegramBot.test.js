@@ -1,7 +1,11 @@
 const Invoice = require("../../src/models/invoice.model");
 const Medicine = require("../../src/models/medicine.model");
 const Customer = require("../../src/models/customer.model");
-const { processTelegramUpdate } = require("../../src/services/telegramBot.service");
+const {
+  processTelegramUpdate,
+  registerBotCommands,
+} = require("../../src/services/telegramBot.service");
+const { createInvoiceRecord } = require("../../src/services/invoice.service");
 const { createTestCustomer, createTestMedicine } = require("./helpers");
 
 const originalFetch = global.fetch;
@@ -290,5 +294,112 @@ describe("Telegram billing bot", () => {
     await say("20 rosmont for rishi");
 
     expect(lastMessage().text).toContain("busy");
+  });
+});
+
+describe("Telegram slash commands", () => {
+  const makeBill = async ({ customer, medicine, quantity = 10, paymentType = "cash" }) =>
+    createInvoiceRecord({
+      invoiceType: "sale",
+      customer: customer._id,
+      paymentType,
+      status: paymentType === "credit" ? "pending" : "paid",
+      invoiceDate: new Date(),
+      items: [
+        {
+          medicine: medicine._id,
+          medicineName: medicine.name,
+          quantity,
+          rate: 100,
+          gstRate: 5,
+        },
+      ],
+    });
+
+  const geminiCalled = () =>
+    global.fetch.mock.calls.some(([url]) => String(url).includes("generativelanguage"));
+
+  it("/today totals today's bills without calling the AI", async () => {
+    const customer = await createTestCustomer({ name: "Rishi Gautam" });
+    const medicine = await createTestMedicine({ name: "Rosmont 20" });
+    await makeBill({ customer, medicine, quantity: 10 });
+    await makeBill({ customer, medicine, quantity: 20, paymentType: "credit" });
+
+    await say("/today");
+
+    const text = lastMessage().text;
+    expect(text).toContain("Bills: 2");
+    expect(text).toContain("₹3,150.00");
+    expect(text).toContain("Still unpaid: ₹2,100.00 (1)");
+    expect(geminiCalled()).toBe(false);
+  });
+
+  it("/pending groups unpaid bills by customer", async () => {
+    const sharma = await createTestCustomer({ name: "Sharma Medical" });
+    const gupta = await createTestCustomer({ name: "Gupta Store" });
+    const medicine = await createTestMedicine({ name: "Rosmont 20" });
+    await makeBill({ customer: sharma, medicine, quantity: 10, paymentType: "credit" });
+    await makeBill({ customer: sharma, medicine, quantity: 10, paymentType: "credit" });
+    await makeBill({ customer: gupta, medicine, quantity: 10 });
+
+    await say("/pending");
+
+    const text = lastMessage().text;
+    expect(text).toContain("Sharma Medical - ₹2,100.00 (2 bills)");
+    expect(text).not.toContain("Gupta Store");
+  });
+
+  it("/stock shows batches, and asks when the name fits two medicines", async () => {
+    await createTestMedicine({ name: "Rosmont 10" });
+    await createTestMedicine({ name: "Rosmont 20" });
+
+    await say("/stock rosmont");
+    expect(lastMessage().text).toContain("More than one medicine");
+
+    await say("/stock rosmont 20");
+    expect(lastMessage().text).toContain("In stock: <b>100</b>");
+    expect(lastMessage().text).toContain("MRP");
+
+    await say("/stock");
+    expect(lastMessage().text).toContain("Tell me which medicine");
+    expect(geminiCalled()).toBe(false);
+  });
+
+  it("/last and /bill send the PDF again", async () => {
+    const customer = await createTestCustomer({ name: "Rishi Gautam" });
+    const medicine = await createTestMedicine({ name: "Rosmont 20" });
+    const invoice = await makeBill({ customer, medicine });
+
+    await say("/last");
+    expect(documents()).toHaveLength(1);
+
+    await say(`/bill ${invoice.invoiceNumber.toLowerCase()}`);
+    expect(documents()).toHaveLength(2);
+
+    await say("/bill AH-1999-001");
+    expect(lastMessage().text).toContain("can't find a bill");
+    expect(documents()).toHaveLength(2);
+  });
+
+  it("answers an unknown command instead of sending it to the AI", async () => {
+    await say("/stok rosmont");
+
+    expect(lastMessage().text).toContain("I don't know");
+    expect(geminiCalled()).toBe(false);
+  });
+
+  it("only answers the owner", async () => {
+    process.env.TELEGRAM_OWNER_CHAT_ID = "999999999";
+    await say("/today");
+    expect(lastMessage().text).toContain("This bot is private");
+  });
+
+  it("registers the command menu with Telegram", async () => {
+    await registerBotCommands();
+
+    const call = telegramCalls.find((c) => c.method === "setMyCommands");
+    expect(call.body.commands.map((c) => c.command)).toEqual(
+      expect.arrayContaining(["last", "bill", "today", "pending", "stock", "cancel"]),
+    );
   });
 });

@@ -2,6 +2,7 @@ const { ERROR_CODES, sendSuccess, sendError } = require("../utils/response");
 const {
   isConfigured,
   processTelegramUpdate,
+  registerBotCommands,
 } = require("../services/telegramBot.service");
 
 const getTelegramStatus = async (req, res) => {
@@ -60,6 +61,8 @@ const setupWebhook = async (req, res) => {
     const url = `https://api.telegram.org/bot${token}/setWebhook?url=${encodeURIComponent(webhookUrl)}&secret_token=${encodeURIComponent(secret)}`;
     const response = await fetch(url);
     const data = await response.json();
+    // Webhook mode never runs the polling start-up, so register the "/" menu here.
+    await registerBotCommands();
     return sendSuccess(res, { data });
   } catch (error) {
     return sendError(res, {
