@@ -2,6 +2,12 @@ const { jsPDF } = require("jspdf");
 const autoTableImport = require("jspdf-autotable");
 const autoTable = autoTableImport.default || autoTableImport;
 const QRCode = require("qrcode");
+const { normalizeDiscount, normalizeGstRate } = require("./invoiceTax");
+
+// This file is the server-side twin of abros-web-frontend/src/utils/invoiceExport.js
+// (the PDF the UI downloads). The two must produce the same document: when one
+// changes, change the other, and keep the money maths identical to
+// abros-web-frontend/src/utils/invoiceTax.js.
 
 const SELLER = {
   name: "ABROS HEALTHCARE",
@@ -15,8 +21,13 @@ const SELLER = {
   ifsc: "PUNB0120310",
   account: "10401132000162",
   forLabel: "For ABROS HEALTHCARE",
-  vpa: "8295566445@paytm",
 };
+
+// The UI reads VITE_UPI_ID; set UPI_ID to the same value here so the QR on a
+// Telegram bill pays the same account as the QR on a bill downloaded from the UI.
+const UPI_ID = () => (process.env.UPI_ID || "8295566445@paytm").trim();
+const UPI_PAYEE_NAME = () =>
+  (process.env.UPI_PAYEE_NAME || SELLER.name).trim();
 
 const TERMS = [
   "1. All disputes Subject to Ambala Jurisdiction only.",
@@ -105,19 +116,28 @@ function getLineItemHsn(item) {
 
 function getLineItemGstRate(item) {
   const med = getMedicine(item);
-  return Number(item.gstRate ?? med?.gstRate ?? 5);
+  return normalizeGstRate(item?.gstRate ?? med?.gstRate);
 }
 
+function calculateLineAmount(quantity, rate, discount = 0) {
+  const gross = Number(quantity || 0) * Number(rate || 0);
+  const discountAmount = gross * (normalizeDiscount(discount) / 100);
+  return Math.round((gross - discountAmount) * 100) / 100;
+}
+
+// The stored line amount is the taxable value (before GST).
+function getLineTaxableAmount(item) {
+  if (item?.amount != null) return Number(item.amount);
+  return calculateLineAmount(item?.quantity, item?.rate, item?.discount);
+}
+
+// What the Amount column shows: taxable value plus CGST and SGST.
 function getLineTotalWithGst(item) {
-  if (item.amount != null && !Number.isNaN(Number(item.amount))) {
-    return Number(item.amount);
-  }
-  const qty = Number(item.quantity) || 0;
-  const rate = Number(item.rate) || 0;
-  const disc = Number(item.discount) || 0;
-  const sub = qty * rate * (1 - disc / 100);
-  const gstRate = getLineItemGstRate(item);
-  return sub * (1 + gstRate / 100);
+  const taxable = getLineTaxableAmount(item);
+  const halfRate = getLineItemGstRate(item) / 200;
+  const cgst = Math.round(taxable * halfRate * 100) / 100;
+  const sgst = Math.round(taxable * halfRate * 100) / 100;
+  return Math.round((taxable + cgst + sgst) * 100) / 100;
 }
 
 function formatLineItemQuantity(quantity, free) {
@@ -126,22 +146,31 @@ function formatLineItemQuantity(quantity, free) {
   return freeQty > 0 ? `${qty}+${freeQty}` : String(qty);
 }
 
-function formatShortInvoiceDate(value) {
+// The server runs in UTC, so a date stored as IST midnight would print as the
+// previous day. Dates are always read in IST, as they are on the user's phone.
+const IST_DATE_PARTS = new Intl.DateTimeFormat("en-GB", {
+  timeZone: "Asia/Kolkata",
+  day: "2-digit",
+  month: "2-digit",
+  year: "2-digit",
+});
+
+function istParts(value) {
   const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "";
-  const day = String(date.getDate()).padStart(2, "0");
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  const year = String(date.getFullYear()).slice(-2);
-  return `${day}-${month}-${year}`;
+  if (Number.isNaN(date.getTime())) return null;
+  return Object.fromEntries(
+    IST_DATE_PARTS.formatToParts(date).map((part) => [part.type, part.value]),
+  );
+}
+
+function formatShortInvoiceDate(value) {
+  const parts = istParts(value);
+  return parts ? `${parts.day}-${parts.month}-${parts.year}` : "";
 }
 
 function formatExpiryShort(value) {
-  if (!value) return "";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return String(value);
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  const year = String(date.getFullYear()).slice(-2);
-  return `${month}-${year}`;
+  const parts = istParts(value);
+  return parts ? `${parts.month}-${parts.year}` : "";
 }
 
 const PDF_ITEM_HEADERS = [
@@ -149,25 +178,25 @@ const PDF_ITEM_HEADERS = [
   "MRP", "QTY.", "RATE", "DISC.", "CGST", "SGST", "Amount"
 ];
 
+// Same rounding steps as the invoice itself: each line's CGST and SGST are
+// rounded to paise, then the grand total to the rupee.
 function calculateTaxSummary(items = []) {
-  let subtotal = 0;
-  let cgst = 0;
-  let sgst = 0;
-
-  items.forEach((item) => {
-    const qty = Number(item.quantity) || 0;
-    const rate = Number(item.rate) || 0;
-    const disc = Number(item.discount) || 0;
-    const base = qty * rate * (1 - disc / 100);
-    const gstRate = getLineItemGstRate(item);
-    const taxAmt = base * (gstRate / 100);
-    subtotal += base;
-    cgst += taxAmt / 2;
-    sgst += taxAmt / 2;
+  const lines = items.map((item) => {
+    const amount = getLineTaxableAmount(item);
+    const halfRate = getLineItemGstRate(item) / 200;
+    return {
+      amount,
+      cgst: Math.round(amount * halfRate * 100) / 100,
+      sgst: Math.round(amount * halfRate * 100) / 100,
+    };
   });
 
+  const subtotal = lines.reduce((sum, line) => sum + line.amount, 0);
+  const cgst = Math.round(lines.reduce((sum, line) => sum + line.cgst, 0) * 100) / 100;
+  const sgst = Math.round(lines.reduce((sum, line) => sum + line.sgst, 0) * 100) / 100;
   const grandTotal = Math.round(subtotal + cgst + sgst);
-  return { subtotal, cgst, sgst, grandTotal };
+
+  return { subtotal: Math.round(subtotal * 100) / 100, cgst, sgst, grandTotal };
 }
 
 function buildPdfTableRows(invoice) {
@@ -445,12 +474,33 @@ function drawInvoiceCopy(doc, invoice, options) {
   return Math.max(blockY, signatureTop + 8);
 }
 
+// Mirrors abros-web-frontend/src/utils/upiPayment.js so both QR codes encode the
+// same payment request.
 async function generateUpiQrDataUrl(amount, note) {
-  const upiUrl = `upi://pay?pa=${encodeURIComponent(SELLER.vpa)}&pn=${encodeURIComponent(SELLER.name)}&am=${encodeURIComponent(amount)}&cu=INR&tn=${encodeURIComponent(note)}`;
-  return QRCode.toDataURL(upiUrl, { width: 300, margin: 1 });
+  const params = new URLSearchParams();
+  params.set("pa", UPI_ID());
+  params.set("pn", UPI_PAYEE_NAME());
+  params.set("cu", "INR");
+  if (amount != null && Number(amount) > 0) {
+    params.set("am", Number(amount).toFixed(2));
+  }
+  if (note) {
+    params.set("tn", String(note).slice(0, 80));
+  }
+  return QRCode.toDataURL(`upi://pay?${params.toString()}`, {
+    width: 240,
+    margin: 1,
+    errorCorrectionLevel: "M",
+  });
 }
 
-async function buildFullInvoicePdfBuffer(invoice) {
+async function buildFullInvoicePdfBuffer(invoiceInput) {
+  // Plain data, so line items and the populated customer/medicine read the same
+  // whether this was handed a Mongoose document or a lean object.
+  const invoice =
+    typeof invoiceInput?.toObject === "function"
+      ? invoiceInput.toObject()
+      : invoiceInput;
   const doc = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4" });
   const pageWidth = doc.internal.pageSize.getWidth();
   const pageHeight = doc.internal.pageSize.getHeight();

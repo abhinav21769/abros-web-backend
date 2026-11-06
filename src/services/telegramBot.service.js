@@ -1,40 +1,64 @@
 const Customer = require("../models/customer.model");
+const Invoice = require("../models/invoice.model");
 const Medicine = require("../models/medicine.model");
-const { createInvoiceRecord } = require("./invoice.service");
+const {
+  createInvoiceRecord,
+  populateInvoice,
+  updateInvoiceRecord,
+} = require("./invoice.service");
+const { AgentBillError, interpretMessage } = require("./billAssistant.service");
+const {
+  answerChoice,
+  applyInterpretation,
+  createDraft,
+  draftFromInvoice,
+  draftProblems,
+  draftToCreatePayload,
+  draftToUpdatePayload,
+  escapeHtml,
+  formatDraft,
+  money,
+} = require("./billDraft.service");
+const { InsufficientStockError } = require("./inventory.service");
 const { buildInvoicePdf } = require("../utils/fullInvoicePdf");
+const { getUserMessage } = require("../utils/messages");
 const logger = require("../utils/logger");
 
 const TELEGRAM_API = "https://api.telegram.org/bot";
-const GEMINI_API =
-  "https://generativelanguage.googleapis.com/v1beta/models";
+const DRAFT_TTL_MS = 30 * 60 * 1000;
 
 let pollingStarted = false;
 let pollingOffset = 0;
 
-class AgentBillError extends Error {
-  constructor(message) {
-    super(message);
-    this.name = "AgentBillError";
-  }
-}
+// One owner, one chat: the open draft and the last bill live in memory. They
+// are lost on a restart, which only costs the owner re-typing a prompt - a draft
+// is never a saved record.
+const sessions = new Map();
+const chatQueues = new Map();
 
-function getBotToken() {
-  return process.env.TELEGRAM_BOT_TOKEN;
-}
+const HELP_TEXT = [
+  "<b>Abros Billing Bot</b>",
+  "",
+  "Type a bill the way you would say it:",
+  "<i>20 rosmont for rishi gautam</i>",
+  "<i>paracetamol 10 + 2 free, dolo 5 at 30 rate for sharma medical, credit</i>",
+  "",
+  "I will show a draft - tap <b>Confirm</b> to create the bill, and the PDF comes back here.",
+  "",
+  "Change a draft or the last bill by just saying so:",
+  "<i>add 5 free on rosmont</i> · <i>10% discount on all</i> · <i>make it credit</i>",
+  "<i>remove dolo</i> · <i>change customer to gupta</i> · <i>edit AH-2026-045 qty of rosmont 30</i>",
+  "<i>delete the bill</i> (asks first)",
+  "",
+  "/cancel drops the open draft.",
+].join("\n");
 
-function getOwnerChatId() {
-  return String(process.env.TELEGRAM_OWNER_CHAT_ID || "").trim();
-}
+const getBotToken = () => process.env.TELEGRAM_BOT_TOKEN;
+const getOwnerChatId = () => String(process.env.TELEGRAM_OWNER_CHAT_ID || "").trim();
+const isConfigured = () => Boolean(getBotToken());
+const telegramUrl = (method) => `${TELEGRAM_API}${getBotToken()}/${method}`;
 
-function isConfigured() {
-  return Boolean(getBotToken());
-}
-
-function telegramUrl(method) {
-  return `${TELEGRAM_API}${getBotToken()}/${method}`;
-}
-
-function assertOwner(chatId) {
+const assertOwner = (chatId) => {
   const ownerChatId = getOwnerChatId();
   if (!ownerChatId) {
     throw new AgentBillError(
@@ -45,26 +69,45 @@ function assertOwner(chatId) {
   if (String(chatId) !== ownerChatId) {
     throw new AgentBillError("This bot is private.");
   }
-}
+};
 
-async function sendTelegramMessage(chatId, text) {
-  if (!getBotToken()) return;
+const telegramCall = async (method, payload) => {
+  if (!getBotToken()) return null;
 
-  await fetch(telegramUrl("sendMessage"), {
+  const response = await fetch(telegramUrl(method), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      chat_id: chatId,
-      text,
-      parse_mode: "HTML",
-    }),
+    body: JSON.stringify(payload),
   });
-}
 
-async function sendTelegramDocument(chatId, pdfBuffer, filename, caption) {
+  if (!response.ok) {
+    logger.error(`Telegram ${method} failed`, new Error(await response.text()));
+  }
+  return response;
+};
+
+const sendTelegramMessage = (chatId, text, buttons) =>
+  telegramCall("sendMessage", {
+    chat_id: chatId,
+    text,
+    parse_mode: "HTML",
+    ...(buttons ? { reply_markup: { inline_keyboard: buttons } } : {}),
+  });
+
+const clearButtons = (message) => {
+  if (!message?.chat?.id || !message?.message_id) return null;
+  return telegramCall("editMessageReplyMarkup", {
+    chat_id: message.chat.id,
+    message_id: message.message_id,
+    reply_markup: { inline_keyboard: [] },
+  }).catch(() => null);
+};
+
+const sendTelegramDocument = async (chatId, pdfBuffer, filename, caption) => {
   const form = new FormData();
   form.append("chat_id", String(chatId));
   form.append("caption", caption);
+  form.append("parse_mode", "HTML");
   form.append(
     "document",
     new Blob([pdfBuffer], { type: "application/pdf" }),
@@ -80,322 +123,403 @@ async function sendTelegramDocument(chatId, pdfBuffer, filename, caption) {
     const body = await response.text();
     throw new AgentBillError(`Could not send PDF on Telegram. ${body}`);
   }
-}
+};
 
-function extractJson(text) {
-  const cleaned = String(text || "")
-    .trim()
-    .replace(/^```json/i, "")
-    .replace(/^```/i, "")
-    .replace(/```$/i, "")
-    .trim();
+const loadCatalog = async () => {
+  const [customers, medicines] = await Promise.all([
+    Customer.find({}, "name address contact").lean(),
+    Medicine.find({}, "name packagingType ptr rate mrp hsn gstRate quantity").lean(),
+  ]);
+  return { customers, medicines };
+};
 
-  const start = cleaned.indexOf("{");
-  const end = cleaned.lastIndexOf("}");
-  if (start === -1 || end === -1 || end <= start) {
-    throw new AgentBillError("Gemini could not understand the bill message.");
+const getSession = (chatId) => {
+  const key = String(chatId);
+  let session = sessions.get(key);
+  if (!session) {
+    session = { draft: null, lastInvoiceId: null, updatedAt: Date.now() };
+    sessions.set(key, session);
   }
 
-  return JSON.parse(cleaned.slice(start, end + 1));
-}
-
-async function fetchDatabaseContext() {
-  const customers = await Customer.find({}, "name address contact gstin dlNo").lean();
-  const medicines = await Medicine.find({}, "name ptr mrp rate packagingType batchNumber expiryDate hsn gstRate quantity").lean();
-
-  const customerListText = customers
-    .map(
-      (c) =>
-        `- ID: "${c._id}" | Name: "${c.name}" | Address: "${c.address || "N/A"}" | Contact: "${c.contact || "N/A"}"`
-    )
-    .join("\n");
-
-  const medicineListText = medicines
-    .map(
-      (m) =>
-        `- ID: "${m._id}" | Name: "${m.name}" | Rate: ${m.ptr ?? m.rate ?? m.mrp ?? 0} | Packing: "${m.packagingType || ""}"`
-    )
-    .join("\n");
-
-  return { customers, medicines, customerListText, medicineListText };
-}
-
-async function parseBillMessage(message) {
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) {
-    throw new AgentBillError("Gemini API key is not configured.");
+  if (session.draft && Date.now() - session.updatedAt > DRAFT_TTL_MS) {
+    session.draft = null;
   }
+  session.updatedAt = Date.now();
+  return session;
+};
 
-  const dbContext = await fetchDatabaseContext();
-  const model = process.env.GEMINI_MODEL || "gemini-2.5-flash";
-
-  const prompt = [
-    "You are an AI assistant for a pharmacy owner. Extract invoice billing details from the owner's message by matching entities against the provided database directory.",
-    "",
-    "--- DATABASE CUSTOMER DIRECTORY ---",
-    dbContext.customerListText || "(No customers in database)",
-    "",
-    "--- DATABASE MEDICINE INVENTORY ---",
-    dbContext.medicineListText || "(No medicines in database)",
-    "",
-    "Return only valid JSON matching this schema:",
-    "{",
-    '  "matchedCustomerId": "string | null",',
-    '  "customerName": "string",',
-    '  "paymentType": "cash|credit",',
-    '  "status": "paid|pending",',
-    '  "items": [',
-    '    {',
-    '      "matchedMedicineId": "string | null",',
-    '      "medicineName": "string",',
-    '      "quantity": number,',
-    '      "free": number,',
-    '      "rate": number | null,',
-    '      "discount": number',
-    "    }",
-    "  ]",
-    "}",
-    "",
-    "Matching Rules:",
-    "1. CUSTOMER MATCHING (RAG): Compare the requested customer in the message against the DATABASE CUSTOMER DIRECTORY.",
-    "   - Use names, partial names, shorthand, or address/city details to find the matching customer.",
-    "   - If a customer shares a similar name, use address/location details in the message to disambiguate.",
-    "   - If matched, set 'matchedCustomerId' to their ID and 'customerName' to their exact full DB name.",
-    "   - If no customer in the database matches, set 'matchedCustomerId': null and 'customerName' to the name extracted from the message.",
-    "2. MEDICINE MATCHING (RAG): Compare requested medicine names against the DATABASE MEDICINE INVENTORY.",
-    "   - If matched, set 'matchedMedicineId' to its ID and 'medicineName' to its exact DB name.",
-    "   - If not matched, set 'matchedMedicineId': null.",
-    "3. DEFAULT VALUES:",
-    "   - paymentType defaults to 'cash'. If 'credit' or 'udhaar' or 'pending' is mentioned, set 'credit'.",
-    "   - status defaults to 'paid' for cash, 'pending' for credit.",
-    "   - free and discount default to 0.",
-    "   - quantity defaults to 1 if not specified.",
-    "   - If rate is not specified in the message, set 'rate': null.",
-    "",
-    `Message: "${message}"`,
-  ].join("\n");
-
-  const response = await fetch(
-    `${GEMINI_API}/${model}:generateContent?key=${encodeURIComponent(apiKey)}`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        contents: [{ parts: [{ text: prompt }] }],
-        generationConfig: {
-          temperature: 0.1,
-          responseMimeType: "application/json",
-        },
-      }),
-    }
-  );
-
-  if (!response.ok) {
-    const body = await response.text();
-    throw new AgentBillError(`Gemini request failed. ${body}`);
-  }
-
-  const data = await response.json();
-  const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
-  const parsed = extractJson(text);
-
-  if (
-    (!parsed.customerName && !parsed.matchedCustomerId) ||
-    !Array.isArray(parsed.items) ||
-    !parsed.items.length
-  ) {
-    throw new AgentBillError(
-      "Please include customer name and at least one medicine item."
+const summarizeDraft = (draft) => {
+  const lines = [
+    draft.mode === "edit" ? `Bill ${draft.invoiceNumber}` : "Draft bill (not saved yet)",
+    `Customer: ${draft.customer?.name || "not set"}; payment: ${draft.paymentType}`,
+  ];
+  draft.items.forEach((line, index) => {
+    lines.push(
+      `#${index + 1} ${line.name} qty ${line.quantity} free ${line.free} rate ${line.rate ?? "none"} discount ${line.discount}%`,
     );
-  }
-
-  return parsed;
-}
-
-async function findOrCreateCustomer(name, matchedCustomerId) {
-  if (matchedCustomerId) {
-    const customer = await Customer.findById(matchedCustomerId);
-    if (customer) return customer;
-  }
-
-  const trimmedName = String(name || "").trim();
-  if (!trimmedName) {
-    throw new AgentBillError("Customer name is required.");
-  }
-
-  // 1. Exact match (case insensitive)
-  const exact = await Customer.findOne({
-    name: { $regex: `^${escapeRegex(trimmedName)}$`, $options: "i" },
   });
-  if (exact) return exact;
+  return lines.join("\n");
+};
 
-  // 2. Substring match (case insensitive)
-  const contains = await Customer.findOne({
-    name: { $regex: escapeRegex(trimmedName), $options: "i" },
-  });
-  if (contains) return contains;
+const findSaleInvoice = async (session, invoiceNumber) => {
+  let invoice = null;
 
-  // 3. Word match for multi-word names
-  const words = trimmedName.split(/\s+/).filter((w) => w.length > 2);
-  for (const word of words) {
-    const wordMatch = await Customer.findOne({
-      name: { $regex: escapeRegex(word), $options: "i" },
+  if (invoiceNumber) {
+    invoice = await Invoice.findOne({
+      invoiceNumber,
+      invoiceType: { $ne: "purchase" },
     });
-    if (wordMatch) return wordMatch;
-  }
-
-  // 4. Create new customer only if no existing customer matched
-  return Customer.create({
-    name: trimmedName,
-    address: "Not provided",
-  });
-}
-
-async function findMedicineByName(name, matchedMedicineId) {
-  if (matchedMedicineId) {
-    const medicine = await Medicine.findById(matchedMedicineId);
-    if (medicine) return medicine;
-  }
-
-  const trimmedName = String(name || "").trim();
-  if (!trimmedName) {
-    throw new AgentBillError("Medicine name is required.");
-  }
-
-  const exact = await Medicine.findOne({
-    name: { $regex: `^${escapeRegex(trimmedName)}$`, $options: "i" },
-  });
-  if (exact) return exact;
-
-  const contains = await Medicine.findOne({
-    name: { $regex: escapeRegex(trimmedName), $options: "i" },
-  }).sort({ quantity: -1, expiryDate: 1 });
-
-  if (contains) return contains;
-
-  throw new AgentBillError(`Medicine not found: ${trimmedName}`);
-}
-
-function escapeRegex(value) {
-  return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-function normalizePaymentType(value) {
-  return value === "credit" ? "credit" : "cash";
-}
-
-function normalizeStatus(value, paymentType) {
-  if (value === "pending" || value === "paid" || value === "cancelled") {
-    return value;
-  }
-  return paymentType === "credit" ? "pending" : "paid";
-}
-
-async function buildInvoicePayload(parsed) {
-  const customer = await findOrCreateCustomer(
-    parsed.customerName,
-    parsed.matchedCustomerId
-  );
-  const paymentType = normalizePaymentType(parsed.paymentType);
-  const status = normalizeStatus(parsed.status, paymentType);
-  const items = [];
-
-  for (const item of parsed.items) {
-    const medicine = await findMedicineByName(
-      item.medicineName,
-      item.matchedMedicineId
-    );
-    const quantity = Number(item.quantity) || 1;
-    const rate =
-      item.rate == null || item.rate === ""
-        ? Number(medicine.ptr ?? medicine.rate ?? medicine.mrp)
-        : Number(item.rate);
-
-    if (!Number.isFinite(rate) || rate < 0) {
-      throw new AgentBillError(`Invalid rate for ${medicine.name}.`);
-    }
-
-    const primaryBatch = medicine.batches && medicine.batches.length > 0
-      ? (medicine.batches.find((b) => b.quantity > 0) || medicine.batches[0])
-      : null;
-
-    items.push({
-      medicine: medicine._id,
-      medicineName: medicine.name,
-      batchNumber: item.batchNumber || primaryBatch?.batchNumber || medicine.batchNumber || undefined,
-      expiryDate: primaryBatch?.expiryDate || medicine.expiryDate || undefined,
-      mrp: primaryBatch?.mrp ?? medicine.mrp ?? undefined,
-      hsn: medicine.hsn || undefined,
-      gstRate: Number(medicine.gstRate) || 5,
-      discount: Number(item.discount) || 0,
-      quantity,
-      free: Number(item.free) || 0,
-      rate,
+  } else if (session.lastInvoiceId) {
+    invoice = await Invoice.findOne({
+      _id: session.lastInvoiceId,
+      invoiceType: { $ne: "purchase" },
     });
   }
 
-  return {
-    invoiceType: "sale",
-    customer: customer._id,
-    paymentType,
-    status,
-    invoiceDate: new Date(),
-    items,
-  };
-}
+  // After a restart the bot forgets which bill was last; the newest sale is the
+  // natural reading of "the bill", and the draft always names it before saving.
+  if (!invoice && !invoiceNumber) {
+    invoice = await Invoice.findOne({ invoiceType: { $ne: "purchase" } }).sort({
+      createdAt: -1,
+    });
+  }
 
-async function createBillFromMessage(message) {
-  const parsed = await parseBillMessage(message);
-  const payload = await buildInvoicePayload(parsed);
-  return createInvoiceRecord(payload);
-}
+  return invoice ? populateInvoice(invoice) : null;
+};
 
-async function handleTelegramMessage(message) {
-  const chatId = message?.chat?.id;
-  const text = String(message?.text || "").trim();
+const truncate = (text, length) =>
+  text.length > length ? `${text.slice(0, length - 1)}…` : text;
 
-  if (!chatId || !text) return;
+const choiceKeyboard = (draft, choice) => {
+  const rows = choice.candidates.map((candidate, index) => {
+    const label =
+      choice.kind === "customer"
+        ? `${candidate.name}${candidate.address ? ` - ${candidate.address}` : ""}`
+        : `${candidate.name}${candidate.packaging ? ` (${candidate.packaging})` : ""} · stock ${candidate.stock}`;
+    return [{ text: truncate(label, 60), callback_data: `pick:${draft.id}:${index}` }];
+  });
 
+  if (choice.kind === "customer") {
+    rows.push([
+      {
+        text: truncate(`➕ New customer "${choice.query}"`, 60),
+        callback_data: `pick:${draft.id}:new`,
+      },
+    ]);
+  } else {
+    rows.push([{ text: "Skip this item", callback_data: `pick:${draft.id}:skip` }]);
+  }
+  rows.push([{ text: "❌ Discard", callback_data: `no:${draft.id}` }]);
+  return rows;
+};
+
+const sendDraft = async (chatId, session) => {
+  const { draft } = session;
+
+  if (draft.mode === "cancel") {
+    await sendTelegramMessage(
+      chatId,
+      `<b>🗑 Delete ${escapeHtml(draft.invoiceNumber)}?</b>\n${escapeHtml(draft.customerName)} - ${money(draft.total)}\nStock will be put back and the bill number is freed.`,
+      [
+        [
+          { text: "🗑 Yes, delete", callback_data: `ok:${draft.id}` },
+          { text: "Keep it", callback_data: `no:${draft.id}` },
+        ],
+      ],
+    );
+    return;
+  }
+
+  const preview = formatDraft(draft);
+
+  if (draft.choices.length) {
+    const choice = draft.choices[0];
+    const question =
+      choice.kind === "customer"
+        ? choice.candidates.length
+          ? `Which customer is <b>"${escapeHtml(choice.query)}"</b>?`
+          : `I can't find a customer called <b>"${escapeHtml(choice.query)}"</b>.`
+        : `Which medicine is <b>"${escapeHtml(choice.query)}"</b>?`;
+
+    await sendTelegramMessage(
+      chatId,
+      `${preview}\n\n${question}`,
+      choiceKeyboard(draft, choice),
+    );
+    return;
+  }
+
+  const problems = draftProblems(draft);
+  if (problems.length) {
+    await sendTelegramMessage(
+      chatId,
+      `${preview}\n\n${problems.map((p) => `• ${escapeHtml(p)}`).join("\n")}`,
+      [[{ text: "❌ Discard", callback_data: `no:${draft.id}` }]],
+    );
+    return;
+  }
+
+  await sendTelegramMessage(chatId, preview, [
+    [
+      {
+        text: draft.mode === "edit" ? "✅ Save changes" : "✅ Create bill",
+        callback_data: `ok:${draft.id}`,
+      },
+      { text: "❌ Discard", callback_data: `no:${draft.id}` },
+    ],
+  ]);
+};
+
+const startCancelDraft = async (chatId, session, invoiceNumber) => {
+  const invoice = await findSaleInvoice(session, invoiceNumber);
+  if (!invoice) {
+    await sendTelegramMessage(chatId, "I could not find that bill.");
+    return;
+  }
+
+  const draft = createDraft();
+  draft.mode = "cancel";
+  draft.invoiceId = String(invoice._id);
+  draft.invoiceNumber = invoice.invoiceNumber;
+  draft.customerName = invoice.customer?.name || "Unknown customer";
+  draft.total = invoice.total;
+  session.draft = draft;
+  await sendDraft(chatId, session);
+};
+
+const handleBillingMessage = async (chatId, text) => {
+  const session = getSession(chatId);
+
+  await telegramCall("sendChatAction", { chat_id: chatId, action: "typing" });
+
+  const interpretation = await interpretMessage(
+    text,
+    session.draft && session.draft.mode !== "cancel" ? summarizeDraft(session.draft) : null,
+  );
+  const catalog = await loadCatalog();
+
+  if (interpretation.intent === "other") {
+    await sendTelegramMessage(chatId, HELP_TEXT);
+    return;
+  }
+
+  if (interpretation.intent === "cancel_invoice") {
+    await startCancelDraft(chatId, session, interpretation.invoiceNumber);
+    return;
+  }
+
+  const openDraft =
+    session.draft && session.draft.mode !== "cancel" ? session.draft : null;
+
+  // "add 5 paracetamol" while a draft is open is a change to it, even when the
+  // AI read it as a fresh bill because no customer was named.
+  const isEdit =
+    interpretation.intent === "edit" ||
+    (interpretation.intent === "create" && openDraft && !interpretation.customerName);
+
+  if (isEdit) {
+    let draft = openDraft;
+    if (!draft) {
+      const invoice = await findSaleInvoice(session, interpretation.invoiceNumber);
+      if (!invoice) {
+        await sendTelegramMessage(
+          chatId,
+          "There is no bill to change yet. Create one first, or name it: <i>edit AH-2026-045 ...</i>",
+        );
+        return;
+      }
+      draft = draftFromInvoice(invoice, catalog);
+    }
+    applyInterpretation(draft, interpretation, catalog);
+    session.draft = draft;
+    await sendDraft(chatId, session);
+    return;
+  }
+
+  const draft = createDraft();
+  applyInterpretation(draft, interpretation, catalog);
+  if (!interpretation.customerName) {
+    draft.notes.push("I did not catch a customer name.");
+  }
+  session.draft = draft;
+  await sendDraft(chatId, session);
+};
+
+const confirmDraft = async (chatId, session) => {
+  const { draft } = session;
+
+  if (draft.confirming) return;
+
+  if (draft.mode !== "cancel") {
+    const problems = draftProblems(draft);
+    if (problems.length) {
+      await sendDraft(chatId, session);
+      return;
+    }
+  }
+
+  draft.confirming = true;
+
+  try {
+    if (draft.mode === "cancel") {
+      await updateInvoiceRecord(draft.invoiceId, { status: "cancelled" });
+      session.draft = null;
+      session.lastInvoiceId = null;
+      await sendTelegramMessage(
+        chatId,
+        `🗑 ${escapeHtml(draft.invoiceNumber)} deleted. Stock has been put back.`,
+      );
+      return;
+    }
+
+    if (!draft.customer.id) {
+      const customer = await Customer.create({
+        name: draft.customer.name,
+        address: "Not provided",
+      });
+      draft.customer = {
+        id: String(customer._id),
+        name: customer.name,
+        address: customer.address,
+        isNew: false,
+      };
+    }
+
+    const invoice =
+      draft.mode === "edit"
+        ? await updateInvoiceRecord(
+            draft.invoiceId,
+            draftToUpdatePayload(draft, draft.customer.id),
+          )
+        : await createInvoiceRecord(draftToCreatePayload(draft, draft.customer.id));
+
+    if (!invoice) {
+      session.draft = null;
+      await sendTelegramMessage(chatId, "That bill no longer exists.");
+      return;
+    }
+
+    const wasEdit = draft.mode === "edit";
+    session.draft = null;
+    session.lastInvoiceId = String(invoice._id);
+
+    const pdfBuffer = await buildInvoicePdf(invoice);
+    await sendTelegramDocument(
+      chatId,
+      pdfBuffer,
+      `${invoice.invoiceNumber}.pdf`,
+      `${wasEdit ? "✏️ Updated" : "✅ Created"} <b>${escapeHtml(invoice.invoiceNumber)}</b> - Total ${money(invoice.total)}\nReply with a change (e.g. <i>add 5 free</i>) to edit it.`,
+    );
+  } finally {
+    // Still set only when saving failed (e.g. not enough stock): the draft stays
+    // so the owner can adjust it and try again.
+    draft.confirming = false;
+  }
+};
+
+const handleText = async (chatId, text) => {
   if (text === "/start" || text === "/help") {
     await sendTelegramMessage(
       chatId,
-      `<b>Abros Billing Bot Ready!</b>\nYour Chat ID: <code>${chatId}</code>\n\nSend any order text (e.g. <i>"Ramesh Kumar Paracetamol 10 tabs 15.50 cash"</i>) to create an invoice and receive your A4 GST Tax Invoice PDF!`,
+      `${HELP_TEXT}\n\nYour chat ID: <code>${chatId}</code>`,
     );
     return;
   }
 
   assertOwner(chatId);
 
-  await sendTelegramMessage(chatId, "Creating invoice...");
-  const invoice = await createBillFromMessage(text);
-  const pdfBuffer = await buildInvoicePdf(invoice);
-  const filename = `${invoice.invoiceNumber}.pdf`;
-  await sendTelegramDocument(
-    chatId,
-    pdfBuffer,
-    filename,
-    `Invoice ${invoice.invoiceNumber} created. Total: Rs. ${invoice.total}`,
+  if (text === "/cancel") {
+    const session = getSession(chatId);
+    session.draft = null;
+    await sendTelegramMessage(chatId, "Draft discarded.");
+    return;
+  }
+
+  await handleBillingMessage(chatId, text);
+};
+
+const handleCallback = async (callback) => {
+  const chatId = callback?.message?.chat?.id;
+  if (!chatId) return;
+
+  telegramCall("answerCallbackQuery", { callback_query_id: callback.id }).catch(
+    () => null,
   );
-}
 
-async function processTelegramUpdate(update) {
+  assertOwner(chatId);
+
+  const [action, draftId, answer] = String(callback.data || "").split(":");
+  const session = getSession(chatId);
+
+  if (!session.draft || session.draft.id !== draftId) {
+    await clearButtons(callback.message);
+    await sendTelegramMessage(
+      chatId,
+      "That draft is no longer open. Send the bill again.",
+    );
+    return;
+  }
+
+  await clearButtons(callback.message);
+
+  if (action === "no") {
+    session.draft = null;
+    await sendTelegramMessage(chatId, "Discarded. Nothing was saved.");
+  } else if (action === "ok") {
+    await confirmDraft(chatId, session);
+  } else if (action === "pick") {
+    answerChoice(session.draft, answer, await loadCatalog());
+    await sendDraft(chatId, session);
+  }
+};
+
+const errorMessageFor = (error) => {
+  // Expected, user-fixable outcomes: reported in chat, not logged as failures.
+  if (error instanceof AgentBillError || error instanceof InsufficientStockError) {
+    return error.message;
+  }
+  logger.error("Telegram bot error", error);
+  return getUserMessage(error, "Something went wrong. Please try again.");
+};
+
+// Updates for the same chat run one after another, so a double-tapped button or
+// two quick messages cannot interleave on the same draft.
+const runInOrder = (chatId, task) => {
+  const key = String(chatId);
+  const previous = chatQueues.get(key) || Promise.resolve();
+  const next = previous.then(task, task);
+  chatQueues.set(key, next);
+  next.finally(() => {
+    if (chatQueues.get(key) === next) chatQueues.delete(key);
+  });
+  return next;
+};
+
+const processTelegramUpdate = async (update) => {
+  const callback = update?.callback_query;
   const message = update?.message || update?.edited_message;
-  if (!message) return;
+  const chatId = callback?.message?.chat?.id || message?.chat?.id;
+  if (!chatId) return;
 
-  try {
-    await handleTelegramMessage(message);
-  } catch (error) {
-    const chatId = message?.chat?.id;
-    if (chatId) {
-      await sendTelegramMessage(
-        chatId,
-        error?.message || "Could not create invoice from this message.",
+  const text = String(message?.text || "").trim();
+  if (!callback && !text) return;
+
+  await runInOrder(chatId, async () => {
+    try {
+      if (callback) {
+        await handleCallback(callback);
+      } else {
+        await handleText(chatId, text);
+      }
+    } catch (error) {
+      await sendTelegramMessage(chatId, escapeHtml(errorMessageFor(error))).catch(
+        () => null,
       );
     }
-  }
-}
+  });
+};
 
-async function startTelegramPolling() {
+const startTelegramPolling = async () => {
   if (pollingStarted || process.env.TELEGRAM_DISABLE_POLLING === "true") {
     return;
   }
@@ -416,10 +540,16 @@ async function startTelegramPolling() {
         body: JSON.stringify({
           offset: pollingOffset || undefined,
           timeout: 25,
-          allowed_updates: ["message", "edited_message"],
+          allowed_updates: ["message", "edited_message", "callback_query"],
         }),
       });
       const data = await response.json();
+
+      if (!data.ok) {
+        logger.error("Telegram getUpdates rejected", new Error(JSON.stringify(data)));
+        await new Promise((resolve) => setTimeout(resolve, 5000));
+        continue;
+      }
 
       for (const update of data.result || []) {
         pollingOffset = update.update_id + 1;
@@ -430,10 +560,9 @@ async function startTelegramPolling() {
       await new Promise((resolve) => setTimeout(resolve, 5000));
     }
   }
-}
+};
 
 module.exports = {
-  createBillFromMessage,
   isConfigured,
   processTelegramUpdate,
   startTelegramPolling,
