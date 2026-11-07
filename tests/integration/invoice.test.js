@@ -132,6 +132,20 @@ describe("Invoice API Endpoints", () => {
       expect(res.body.data.items[0].status).toBe("pending");
     });
 
+    test("filters invoices by payment type (bill type)", async () => {
+      const credit = await request(app)
+        .get("/api/invoices?paymentType=credit")
+        .set("Authorization", `Bearer ${authToken}`);
+      expect(credit.status).toBe(200);
+      expect(credit.body.data.items.length).toBe(1);
+
+      const cash = await request(app)
+        .get("/api/invoices?paymentType=cash")
+        .set("Authorization", `Bearer ${authToken}`);
+      expect(cash.status).toBe(200);
+      expect(cash.body.data.items.length).toBe(0);
+    });
+
     test("searches invoices by customer name via search parameter", async () => {
       const res = await request(app)
         .get(`/api/invoices?search=${encodeURIComponent(customer.name.slice(0, 4))}`)
