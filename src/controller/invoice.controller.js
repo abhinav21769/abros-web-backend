@@ -56,6 +56,7 @@ const getAllInvoices = async (req, res) => {
       invoiceNumber,
       customer,
       invoiceType,
+      paymentType,
     } = req.query;
 
     // M-3 FIX: Validate sortBy against allowlist
@@ -65,6 +66,7 @@ const getAllInvoices = async (req, res) => {
     const filter = {};
 
     if (status) filter.status = status;
+    if (["cash", "credit"].includes(paymentType)) filter.paymentType = paymentType;
     if (invoiceType) {
       const type = normalizeInvoiceType(invoiceType);
       if (type === "purchase") {
