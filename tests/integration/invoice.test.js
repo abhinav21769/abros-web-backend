@@ -629,4 +629,101 @@ describe("Invoice API Endpoints", () => {
       expect(med.quantity).toBe(50);
     });
   });
+
+  describe("a sale split across batches is undone batch by batch", () => {
+    let splitMed;
+    const qty = async (batchNumber) =>
+      (await Medicine.findById(splitMed._id)).batches.find(
+        (b) => b.batchNumber === batchNumber,
+      ).quantity;
+
+    beforeEach(async () => {
+      splitMed = await createTestMedicine({
+        name: "Drops Split",
+        batches: [
+          { batchNumber: "PMH-281A", expiryDate: new Date(Date.now() + 100 * 86400000), mrp: 50, rate: 30, ptr: 28, quantity: 10 },
+          { batchNumber: "PMH-275A", expiryDate: new Date(Date.now() + 200 * 86400000), mrp: 50, rate: 30, ptr: 28, quantity: 100 },
+        ],
+      });
+    });
+
+    const sell = (quantity) =>
+      request(app)
+        .post("/api/invoices")
+        .set("Authorization", `Bearer ${authToken}`)
+        .send({
+          customer: customer._id,
+          items: [{ medicine: splitMed._id, medicineName: splitMed.name, quantity, rate: 40 }],
+        });
+
+    test("deleting it returns each share to the batch it came from", async () => {
+      const res = await sell(36);
+      expect(res.status).toBe(201);
+      expect(await qty("PMH-281A")).toBe(0);
+      expect(await qty("PMH-275A")).toBe(74);
+
+      const stored = await Invoice.findById(res.body.data._id).lean();
+      expect(stored.items[0].batchAllocations).toMatchObject([
+        { batchNumber: "PMH-281A", quantity: 10 },
+        { batchNumber: "PMH-275A", quantity: 26 },
+      ]);
+
+      const del = await request(app)
+        .delete(`/api/invoices/${res.body.data._id}`)
+        .set("Authorization", `Bearer ${authToken}`);
+      expect(del.status).toBe(200);
+
+      expect(await qty("PMH-281A")).toBe(10);
+      expect(await qty("PMH-275A")).toBe(100);
+    });
+
+    test("cancelling it does the same", async () => {
+      const res = await sell(36);
+      await request(app)
+        .put(`/api/invoices/${res.body.data._id}`)
+        .set("Authorization", `Bearer ${authToken}`)
+        .send({ status: "cancelled" });
+
+      expect(await qty("PMH-281A")).toBe(10);
+      expect(await qty("PMH-275A")).toBe(100);
+    });
+
+    test("a bill saved before allocations were stored is restored from the ledger", async () => {
+      const res = await sell(36);
+      // Simulate a legacy invoice: only the primary batch is on the line.
+      await Invoice.collection.updateOne(
+        { _id: new (require("mongoose").Types.ObjectId)(res.body.data._id) },
+        { $unset: { "items.0.batchAllocations": "" } },
+      );
+
+      await request(app)
+        .delete(`/api/invoices/${res.body.data._id}`)
+        .set("Authorization", `Bearer ${authToken}`);
+
+      expect(await qty("PMH-281A")).toBe(10);
+      expect(await qty("PMH-275A")).toBe(100);
+    });
+
+    test("editing a split bill with its batch number echoed back keeps stock balanced", async () => {
+      const res = await sell(36);
+      const edit = await request(app)
+        .put(`/api/invoices/${res.body.data._id}`)
+        .set("Authorization", `Bearer ${authToken}`)
+        .send({
+          items: [
+            {
+              medicine: splitMed._id,
+              medicineName: splitMed.name,
+              batchNumber: "PMH-281A", // what the form sends back
+              quantity: 36,
+              rate: 40,
+            },
+          ],
+        });
+
+      expect(edit.status).toBe(200);
+      expect(await qty("PMH-281A")).toBe(0);
+      expect(await qty("PMH-275A")).toBe(74);
+    });
+  });
 });

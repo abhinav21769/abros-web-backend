@@ -1,6 +1,7 @@
 const mongoose = require("mongoose");
 const Medicine = require("../models/medicine.model");
 const { recordLedgerEntry } = require("./ledger.service");
+const StockLedger = require("../models/stockLedger.model");
 
 class InsufficientStockError extends Error {
   constructor(medicineName, requested, available, batchNumber) {
@@ -204,6 +205,9 @@ async function deductStockForItems(items = [], session = null, ledgerMeta = null
         item.expiryDate = batch.expiryDate;
         item.mrp = batch.mrp;
         item.sourceBatch = snapshotBatch(batch);
+        item.batchAllocations = [
+          { batchNumber: batch.batchNumber, quantity: units, ...snapshotBatch(batch) },
+        ];
 
         await medicine.save({ session });
 
@@ -245,6 +249,7 @@ async function deductStockForItems(items = [], session = null, ledgerMeta = null
         let remainingToDeduct = units;
         let primaryUsedBatch = null;
         const ledgerDeductions = [];
+        const allocations = [];
 
         for (const batch of sortedBatches) {
           if (remainingToDeduct <= 0) break;
@@ -253,6 +258,11 @@ async function deductStockForItems(items = [], session = null, ledgerMeta = null
           remainingToDeduct -= deduct;
           if (!primaryUsedBatch) primaryUsedBatch = batch;
           ledgerDeductions.push({ batchNumber: batch.batchNumber, deduct });
+          allocations.push({
+            batchNumber: batch.batchNumber,
+            quantity: deduct,
+            ...snapshotBatch(batch),
+          });
         }
 
         if (primaryUsedBatch) {
@@ -260,6 +270,7 @@ async function deductStockForItems(items = [], session = null, ledgerMeta = null
           item.expiryDate = primaryUsedBatch.expiryDate;
           item.mrp = primaryUsedBatch.mrp;
           item.sourceBatch = snapshotBatch(primaryUsedBatch);
+          item.batchAllocations = allocations;
         }
 
         await medicine.save({ session });
@@ -364,6 +375,76 @@ async function addStockForItems(items = [], session = null, ledgerMeta = null) {
 }
 
 /**
+ * Works out which batches a sale line's units must go back to.
+ *
+ * A line can be split across batches by FEFO (e.g. 26 from one, 10 from
+ * another). Putting every unit back on a single batch makes one batch overstate
+ * and the other understate its stock, so the split is replayed exactly:
+ *   1. the allocations stored on the line (every sale since this fix);
+ *   2. otherwise the net the stock ledger shows this invoice took per batch
+ *      (bills made before allocations were stored);
+ *   3. otherwise the single batch named on the line (nothing else is known).
+ * A source is only trusted when it adds up to the units being restored.
+ */
+async function resolveRestoreParts(item, medicine, units, session, ledgerMeta) {
+  const sum = (list) => list.reduce((total, p) => total + p.quantity, 0);
+
+  const stored = (item.batchAllocations || [])
+    .map((a) => ({
+      batchNumber: a.batchNumber?.trim(),
+      quantity: Number(a.quantity) || 0,
+      snapshot: {
+        rate: a.rate,
+        ptr: a.ptr,
+        mrp: a.mrp,
+        expiryDate: a.expiryDate,
+      },
+    }))
+    .filter((p) => p.batchNumber && p.quantity > 0);
+  if (stored.length > 0 && sum(stored) === units) return stored;
+
+  if (ledgerMeta?.referenceId) {
+    let query = StockLedger.find({
+      medicine: medicine._id,
+      referenceType: ledgerMeta.referenceType,
+      referenceId: ledgerMeta.referenceId,
+    });
+    if (session) query = query.session(session);
+    const entries = await query.lean();
+
+    // Net units this invoice is holding, per batch: sales are negative and any
+    // earlier restore positive, so what is left is what still has to go back.
+    const held = new Map();
+    for (const entry of entries) {
+      if (!entry.batchNumber) continue;
+      const key = entry.batchNumber.trim().toLowerCase();
+      const current = held.get(key) || { batchNumber: entry.batchNumber.trim(), quantity: 0 };
+      current.quantity -= entry.quantityChange;
+      held.set(key, current);
+    }
+    const fromLedger = [...held.values()]
+      .filter((p) => p.quantity > 0)
+      .map((p) => ({
+        ...p,
+        snapshot:
+          item.sourceBatch && item.batchNumber?.trim().toLowerCase() === p.batchNumber.toLowerCase()
+            ? item.sourceBatch
+            : undefined,
+      }));
+    if (fromLedger.length > 0 && sum(fromLedger) === units) return fromLedger;
+  }
+
+  return [
+    {
+      batchNumber:
+        item.batchNumber?.trim() || medicine.batchNumber?.trim() || "BATCH-01",
+      quantity: units,
+      snapshot: item.sourceBatch,
+    },
+  ];
+}
+
+/**
  * Restores stock for items (invoice cancellation, edit or delete).
  *
  * H-3 FIX: this used to delegate to addStockForItems, which reads a line the way
@@ -387,67 +468,72 @@ async function restoreStockForItems(items = [], session = null, ledgerMeta = nul
         throw new Error(`Medicine with ID ${medicineId} not found.`);
       }
 
-      const batchNum =
-        item.batchNumber?.trim() || medicine.batchNumber?.trim() || "BATCH-01";
-      const existingBatch = medicine.batches.find(
-        (b) => b.batchNumber.toLowerCase() === batchNum.toLowerCase(),
-      );
+      const parts = await resolveRestoreParts(item, medicine, units, session, ledgerMeta);
 
-      let notes = ledgerMeta?.notes;
+      for (const part of parts) {
+        const batchNum = part.batchNumber;
+        const existingBatch = medicine.batches.find(
+          (b) => b.batchNumber.toLowerCase() === batchNum.toLowerCase(),
+        );
 
-      if (existingBatch) {
-        // Quantity only. Price and expiry describe the batch, not the sale.
-        existingBatch.quantity += units;
-      } else {
-        // The batch is gone, so it has to be rebuilt. Every value comes from
-        // stock data - the line's own sale rate is deliberately never used.
-        const snapshot = item.sourceBatch || {};
-        const unknown = [];
+        let notes = ledgerMeta?.notes;
 
-        const expiryDate =
-          snapshot.expiryDate || item.expiryDate || medicine.expiryDate;
-        const rate = firstNumber(snapshot.rate, medicine.rate);
-        const ptr = firstNumber(snapshot.ptr, medicine.ptr, rate);
-        const mrp = firstNumber(snapshot.mrp, item.mrp, medicine.mrp, rate);
+        if (existingBatch) {
+          // Quantity only. Price and expiry describe the batch, not the sale.
+          existingBatch.quantity += part.quantity;
+        } else {
+          // The batch is gone, so it has to be rebuilt. Every value comes from
+          // stock data - the line's own sale rate is deliberately never used.
+          const snapshot = part.snapshot || {};
+          const unknown = [];
 
-        if (!expiryDate) unknown.push("expiry date");
-        if (rate === null) unknown.push("cost price");
-        if (mrp === null) unknown.push("MRP");
+          const expiryDate =
+            snapshot.expiryDate || item.expiryDate || medicine.expiryDate;
+          const rate = firstNumber(snapshot.rate, medicine.rate);
+          const ptr = firstNumber(snapshot.ptr, medicine.ptr, rate);
+          const mrp = firstNumber(snapshot.mrp, item.mrp, medicine.mrp, rate);
 
-        medicine.batches.push({
-          batchNumber: batchNum,
-          expiryDate: expiryDate || new Date(Date.now() + 365 * 86400000),
-          mrp: mrp ?? 0,
-          rate: rate ?? 0,
-          ptr: ptr ?? 0,
-          quantity: units,
-        });
+          if (!expiryDate) unknown.push("expiry date");
+          if (rate === null) unknown.push("cost price");
+          if (mrp === null) unknown.push("MRP");
 
-        if (unknown.length > 0) {
-          // Surfaced in the stock ledger so the gap is visible rather than
-          // silently filled with a plausible-looking number.
-          notes = [notes, `Batch rebuilt on restore - verify ${unknown.join(", ")}`]
-            .filter(Boolean)
-            .join(" | ");
+          medicine.batches.push({
+            batchNumber: batchNum,
+            expiryDate: expiryDate || new Date(Date.now() + 365 * 86400000),
+            mrp: mrp ?? 0,
+            rate: rate ?? 0,
+            ptr: ptr ?? 0,
+            quantity: part.quantity,
+          });
+
+          if (unknown.length > 0) {
+            // Surfaced in the stock ledger so the gap is visible rather than
+            // silently filled with a plausible-looking number.
+            notes = [notes, `Batch rebuilt on restore - verify ${unknown.join(", ")}`]
+              .filter(Boolean)
+              .join(" | ");
+          }
         }
+
+        part.notes = notes;
       }
 
       await medicine.save({ session });
 
       if (ledgerMeta) {
         await recordLedgerEntry(
-          {
+          parts.map((part) => ({
             medicine: medicine._id,
             medicineName: medicine.name,
-            batchNumber: batchNum,
+            batchNumber: part.batchNumber,
             type: ledgerMeta.type || "adjustment",
-            quantityChange: units,
+            quantityChange: part.quantity,
             balanceAfter: medicine.quantity,
             referenceType: ledgerMeta.referenceType,
             referenceId: ledgerMeta.referenceId,
             referenceLabel: ledgerMeta.referenceLabel,
-            notes,
-          },
+            notes: part.notes,
+          })),
           session,
         );
       }
@@ -487,9 +573,33 @@ async function syncInvoiceStockChanges(
       await deductStockForItems(oldItems, session, { type: "adjustment", ...ledgerMeta });
       await addStockForItems(newItems, session, ledgerMeta);
     } else {
+      releaseSplitBatchPins(oldItems, newItems);
       await restoreStockForItems(oldItems, session, ledgerMeta);
       await deductStockForItems(newItems, session, ledgerMeta);
     }
+  }
+}
+
+/**
+ * An edit form sends back each line's batch number, which for a line split over
+ * several batches is only the first of them. Pinning the re-deduction to that
+ * one batch would fail (or move stock between batches), so a line still on the
+ * batch it was originally billed from is allocated afresh. A batch the user
+ * deliberately changed to is left alone.
+ */
+function releaseSplitBatchPins(oldItems = [], newItems = []) {
+  for (const item of newItems) {
+    const pinned = item.batchNumber?.trim().toLowerCase();
+    if (!pinned) continue;
+    const medicineId = String(getMedicineId(item));
+
+    const previous = oldItems.find(
+      (old) =>
+        String(getMedicineId(old)) === medicineId &&
+        old.batchNumber?.trim().toLowerCase() === pinned &&
+        (old.batchAllocations?.length || 0) > 1,
+    );
+    if (previous) delete item.batchNumber;
   }
 }
 

@@ -12,6 +12,21 @@ const batchSnapshotSchema = new mongoose.Schema(
   { _id: false },
 );
 
+// Where every unit of a sale line came from. FEFO can split one line across
+// several batches (26 from one, 10 from another); restoring the line has to put
+// each share back where it was taken, not pile it all onto the first batch.
+const batchAllocationSchema = new mongoose.Schema(
+  {
+    batchNumber: { type: String, trim: true, required: true },
+    quantity: { type: Number, min: 1, required: true },
+    rate: { type: Number, min: 0 },
+    ptr: { type: Number, min: 0 },
+    mrp: { type: Number, min: 0 },
+    expiryDate: { type: Date },
+  },
+  { _id: false },
+);
+
 const invoiceItemSchema = new mongoose.Schema(
   {
     medicine: {
@@ -73,6 +88,10 @@ const invoiceItemSchema = new mongoose.Schema(
     },
     sourceBatch: {
       type: batchSnapshotSchema,
+      default: undefined,
+    },
+    batchAllocations: {
+      type: [batchAllocationSchema],
       default: undefined,
     },
   },
