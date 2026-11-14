@@ -77,6 +77,9 @@ const ERRORS = {
     invoice: "Could not delete invoice. Please try again.",
     customerServiceEntry: "Could not remove entry. Please try again.",
   },
+  invalid: {
+    paymentDate: "Payment date must be a valid date that is not in the future.",
+  },
   immutable: {
     invoiceNumber:
       "Invoice number cannot be changed after the invoice is issued.",
