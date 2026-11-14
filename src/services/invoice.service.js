@@ -116,7 +116,7 @@ const createInvoiceRecord = async (payload) => {
   const invoiceNumber =
     rest.invoiceNumber || (await generateInvoiceNumberValue(type));
 
-  const paidAt = status === "paid" ? (rest.paidAt || new Date()) : undefined;
+  const paidAt = status === "paid" ? resolvePaidAt(rest.paidAt) : undefined;
 
   const invoice = await withTransaction(async (session) => {
     const created = new Invoice({
@@ -177,6 +177,7 @@ const SALE_UPDATABLE_FIELDS = [
   "invoiceDate",
   "status",
   "paymentType",
+  "paidAt",
   "notes",
 ];
 
@@ -189,6 +190,7 @@ const PURCHASE_UPDATABLE_FIELDS = [
   "invoiceDate",
   "status",
   "paymentType",
+  "paidAt",
   "notes",
 ];
 
@@ -198,6 +200,29 @@ class ImmutableFieldError extends Error {
     this.name = "ImmutableFieldError";
   }
 }
+
+class InvalidPaymentDateError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "InvalidPaymentDateError";
+  }
+}
+
+// The date the payment was received, picked on a calendar. It is a day, not a
+// moment: stored as that IST day's midnight, like invoiceDate. A missing value
+// means "today"; an unreadable or future date is rejected rather than guessed.
+const resolvePaidAt = (value) => {
+  if (value === undefined || value === null || value === "") {
+    return new Date();
+  }
+
+  const paidAt = normalizeInvoiceDate(value);
+  if (!paidAt || paidAt.getTime() > Date.now()) {
+    throw new InvalidPaymentDateError(ERRORS.invalid.paymentDate);
+  }
+
+  return paidAt;
+};
 
 const pickUpdatableFields = (body, invoiceType) => {
   const allowed =
@@ -277,8 +302,15 @@ const updateInvoiceRecord = async (id, body = {}) => {
     updateData.status = newStatus;
 
     if (newStatus === "paid") {
-      if (oldStatus !== "paid" || !existing.paidAt) {
+      // A date sent with the request wins, so the user can say when the money
+      // actually came in; otherwise a fresh payment is stamped today and an
+      // already-paid invoice keeps the date it has.
+      if (updateData.paidAt) {
+        updateData.paidAt = resolvePaidAt(updateData.paidAt);
+      } else if (oldStatus !== "paid" || !existing.paidAt) {
         updateData.paidAt = new Date();
+      } else {
+        delete updateData.paidAt;
       }
     } else {
       updateData.paidAt = null;
@@ -326,6 +358,7 @@ const updateInvoiceRecord = async (id, body = {}) => {
 
 module.exports = {
   ImmutableFieldError,
+  InvalidPaymentDateError,
   MEDICINE_POPULATE_FIELDS,
   createInvoiceRecord,
   generateInvoiceNumberValue,

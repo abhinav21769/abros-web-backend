@@ -287,19 +287,74 @@ describe("Invoice API Endpoints", () => {
       expect(res.body.data.notes).toBe("Delivered by hand");
     });
 
-    test("paidAt is set by the server, not by the client", async () => {
+    test("marking an invoice paid stamps today when no date is given", async () => {
       const created = await createInvoice();
       const invoiceId = created.body.data._id;
 
       const res = await request(app)
         .put(`/api/invoices/${invoiceId}`)
         .set("Authorization", `Bearer ${authToken}`)
-        .send({ status: "paid", paidAt: "2020-01-01T00:00:00.000Z" });
+        .send({ status: "paid" });
 
       expect(res.status).toBe(200);
 
       const stored = await Invoice.findById(invoiceId);
-      expect(stored.paidAt.getFullYear()).toBe(new Date().getFullYear());
+      expect(Date.now() - stored.paidAt.getTime()).toBeLessThan(60 * 1000);
+    });
+
+    test("marking an invoice paid records the chosen payment date", async () => {
+      const created = await createInvoice();
+      const invoiceId = created.body.data._id;
+
+      const res = await request(app)
+        .put(`/api/invoices/${invoiceId}`)
+        .set("Authorization", `Bearer ${authToken}`)
+        .send({ status: "paid", paidAt: "2024-03-15" });
+
+      expect(res.status).toBe(200);
+
+      const stored = await Invoice.findById(invoiceId);
+      expect(stored.paidAt.toISOString()).toBe(
+        new Date("2024-03-15T00:00:00+05:30").toISOString(),
+      );
+    });
+
+    test("rejects a payment date in the future or one that is not a date", async () => {
+      const created = await createInvoice();
+      const invoiceId = created.body.data._id;
+
+      for (const paidAt of ["2999-01-01", "not-a-date"]) {
+        const res = await request(app)
+          .put(`/api/invoices/${invoiceId}`)
+          .set("Authorization", `Bearer ${authToken}`)
+          .send({ status: "paid", paidAt });
+
+        expect(res.status).toBe(400);
+      }
+
+      const stored = await Invoice.findById(invoiceId);
+      expect(stored.status).toBe("pending");
+      expect(stored.paidAt).toBeUndefined();
+    });
+
+    test("a paid invoice keeps its payment date across unrelated edits", async () => {
+      const created = await createInvoice();
+      const invoiceId = created.body.data._id;
+
+      await request(app)
+        .put(`/api/invoices/${invoiceId}`)
+        .set("Authorization", `Bearer ${authToken}`)
+        .send({ status: "paid", paidAt: "2024-03-15" });
+
+      await request(app)
+        .put(`/api/invoices/${invoiceId}`)
+        .set("Authorization", `Bearer ${authToken}`)
+        .send({ notes: "Receipt filed" });
+
+      const stored = await Invoice.findById(invoiceId);
+      expect(stored.paidAt.toISOString()).toBe(
+        new Date("2024-03-15T00:00:00+05:30").toISOString(),
+      );
     });
 
     test("totals are recomputed when items change", async () => {

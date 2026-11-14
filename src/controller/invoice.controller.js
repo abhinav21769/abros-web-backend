@@ -6,6 +6,7 @@ const logger = require("../utils/logger");
 
 const {
   ImmutableFieldError,
+  InvalidPaymentDateError,
   MEDICINE_POPULATE_FIELDS,
   createInvoiceRecord,
   generateInvoiceNumberValue,
@@ -30,6 +31,15 @@ const createInvoice = async (req, res) => {
       statusCode: 201,
     });
   } catch (error) {
+    if (error instanceof InvalidPaymentDateError) {
+      return sendError(res, {
+        message: error.message,
+        code: ERROR_CODES.VALIDATION_ERROR,
+        errorMessage: error.message,
+        statusCode: 400,
+      });
+    }
+
     return sendError(res, {
       message: ERRORS.saveFailed.invoice,
       code:
@@ -174,7 +184,9 @@ const updateInvoice = async (req, res) => {
       data: invoice,
     });
   } catch (error) {
-    const isImmutableField = error instanceof ImmutableFieldError;
+    const isImmutableField =
+      error instanceof ImmutableFieldError ||
+      error instanceof InvalidPaymentDateError;
 
     return sendError(res, {
       message: isImmutableField ? error.message : ERRORS.saveFailed.invoice,
